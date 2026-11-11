@@ -1,0 +1,17 @@
+{
+  "name": "반짝이",
+  "short_name": "반짝이",
+  "description": "수유, 소변/대변, 체온, 투약, 토, 체중, 키를 가족이 같이 기록해요",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#131A2C",
+  "theme_color": "#131A2C",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
