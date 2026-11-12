@@ -9,7 +9,14 @@
 (function () {
   var m = 'system';
   try { var v = localStorage.getItem('babylog.v1.theme'); if (v) m = JSON.parse(v); } catch (e) {}
-  var dark = m === 'dark' || (m !== 'light' && !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches));
+  var dark = m === 'dark' || (m !== 'light' && m !== 'time' && !!(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches));
+  if (m === 'time') {   // 시간(1.7.0): 블랙 시작~끝 사이는 블랙
+    var t = { start:'21:00', end:'07:00' };
+    try { var tv = JSON.parse(localStorage.getItem('babylog.v1.themeTime')); if (tv && tv.start && tv.end) t = tv; } catch (e) {}
+    var mi = function (x) { var a = String(x).split(':'); return a[0] * 60 + +a[1]; };
+    var n = new Date(), c = n.getHours() * 60 + n.getMinutes(), s = mi(t.start), en = mi(t.end);
+    dark = s < en ? (c >= s && c < en) : s > en ? (c >= s || c < en) : false;
+  }
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   document.getElementById('themeColor').setAttribute('content', dark ? '#131A2C' : '#F2F4F7');
 })();
@@ -295,6 +302,8 @@ svg{display:block}
 .ev-end{margin-top:6px}
 .ev-end .when-row{margin-top:10px}
 .ev-end .chip{flex:none;height:auto;min-height:64px;border-radius:18px;padding:0 16px}
+.tt-field{margin-top:14px}
+.tt-field .twheel{margin-top:6px}
 .ev-yearly{display:flex;width:100%;height:48px;margin-top:10px;align-items:center;justify-content:center}
 .ev-rep-note{margin:8px 2px 0;font-size:14px;line-height:1.45;color:var(--muted)}
 
@@ -542,7 +551,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.6.1';
+const VERSION = '1.7.0';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -602,15 +611,35 @@ const store = {
 
 let cfg = Object.assign({ babyName:'', birth:'', who:'', apiUrl:'', code:'' }, store.get('config', {}));
 
-/* ---------- 화면 테마: 화이트, 블랙, 시스템(폰 설정 따라감) ---------- */
-const THEME_LABELS = { light:'화이트', dark:'블랙', system:'시스템' };
+/* ---------- 화면 테마: 화이트, 블랙, 시스템(폰 설정 따라감), 시간(1.7.0) ---------- */
+const THEME_LABELS = { light:'화이트', dark:'블랙', system:'시스템', time:'시간' };
 let themePref = THEME_LABELS[store.get('theme', 'system')] ? store.get('theme', 'system') : 'system';
+const THEME_TIME_DEF = { start:'21:00', end:'07:00' };
+const validThemeTime = (t) => !!t && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.start) && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.end) && t.start !== t.end;
+let themeTime = validThemeTime(store.get('themeTime', null)) ? store.get('themeTime', null) : Object.assign({}, THEME_TIME_DEF);
 const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+const hmMin = (x) => { const [a, b] = x.split(':').map(Number); return a * 60 + b; };
+// 블랙 시작~끝 사이인지. 자정을 넘는 구간(21:00~07:00)과 같은 날 구간(13:00~15:00) 둘 다
+function inDarkTime(t, now) {
+  const n = now || new Date(), c = n.getHours() * 60 + n.getMinutes(), s = hmMin(t.start), e = hmMin(t.end);
+  return s < e ? (c >= s && c < e) : s > e ? (c >= s || c < e) : false;
+}
+let themeTimer = 0;
+let themeNote = null;   // 설정 창이 열려 있으면 안내 문구를 다시 씀
 function applyTheme() {
-  const dark = themePref === 'dark' || (themePref === 'system' && !!(darkMQ && darkMQ.matches));
+  const dark = themePref === 'dark' || (themePref === 'system' && !!(darkMQ && darkMQ.matches)) || (themePref === 'time' && inDarkTime(themeTime));
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   const tc = document.getElementById('themeColor');
   if (tc) tc.setAttribute('content', dark ? '#131A2C' : '#F2F4F7');
+  // 시간이면 다음 바뀌는 시각에 맞춰 한 번 더(30초 tick과 다시 보일 때도 맞춤)
+  clearTimeout(themeTimer);
+  if (themePref === 'time') {
+    const n = new Date(), next = hmMin(dark ? themeTime.end : themeTime.start);
+    let wait = ((next - (n.getHours() * 60 + n.getMinutes()) + 1440) % 1440) * 60000 - n.getSeconds() * 1000 - n.getMilliseconds();
+    if (wait <= 0) wait += 1440 * 60000;
+    themeTimer = setTimeout(applyTheme, Math.min(wait + 50, 6 * 3600000));
+  }
+  if (themeNote) themeNote();
 }
 if (darkMQ) {
   const onSys = () => { if (themePref === 'system') applyTheme(); };
@@ -3520,7 +3549,7 @@ function openSettings(first) {
       <label class="lbl">이름<input class="text-input" id="sName" maxlength="20" autocomplete="off" placeholder="예: 아기 이름"></label>
       <label class="lbl">생일<input class="text-input" id="sBirth" type="date"></label>
     </section>
-    <section class="set"><h3>화면</h3><div id="sTheme"></div><p class="note">이 폰에만 적용돼요. 시스템을 고르면 폰의 밝은 모드, 어두운 모드를 따라가요.</p></section>`;
+    <section class="set"><h3>화면</h3><div id="sTheme"></div><div id="sThemeTime" hidden></div><p class="note" id="sThemeNote"></p></section>`;
   if (PREVIEW) {
     html += `<section class="set"><h3>구글 시트 연결</h3><p class="note">미리보기에서는 구글 시트에 연결하지 않아요. 여기서 남긴 기록은 이 화면에만 있다가 사라질 수 있어요.</p></section>`;
   } else {
@@ -3548,12 +3577,58 @@ function openSettings(first) {
   $('#sBirth', body).value = draft.birth || '';
   $('#sBirth', body).max = todayStr();
   openPicker($('#sBirth', body));
+  // 시간: 블랙 시작과 블랙 끝을 일정 창과 같은 휠(오전/오후, 시, 10분)로
+  const ttBox = $('#sThemeTime', body), tNote = $('#sThemeNote', body);
+  const ttErr = h('p', { class:'err', role:'alert' });
+  const ttDraft = Object.assign({}, themeTime);
+  const tw = {};
+  const ttWheel = (key, label) => {
+    const [hh, mm] = ttDraft[key].split(':').map(Number);
+    const wrap = h('div', { class:'tt-field' });
+    wrap.appendChild(h('span', { class:'field-label' }, label));
+    const box = h('div', { class:'twheel', 'data-tt':key });
+    box.appendChild(h('div', { class:'tband', 'aria-hidden':'true' }));
+    const onCh = () => { ttDraft[key] = `${pad((Number(w.h.value) % 12) + (w.ap.value === '오후' ? 12 : 0))}:${w.m.value}`; ttChanged(); };
+    const w = {
+      ap:wheel(['오전', '오후'], hh < 12 ? '오전' : '오후', (v, c) => { if (c) onCh(); }, { item:48, band:'', label:`${label} 오전 오후`, cls:'ap' }),
+      h:wheel(Array.from({ length:12 }, (_, i) => String(i + 1)), String(hh % 12 === 0 ? 12 : hh % 12), (v, c) => { if (c) onCh(); }, { item:48, band:'', label:`${label} 시` }),
+      m:wheel(EV_MINS, pad(Math.round(mm / 10) * 10 % 60), (v, c) => { if (c) onCh(); }, { item:48, band:'', label:`${label} 분` }),
+    };
+    box.appendChild(w.ap.el); box.appendChild(w.h.el); box.appendChild(h('span', { class:'colon', 'aria-hidden':'true' }, ':')); box.appendChild(w.m.el);
+    wrap.appendChild(box);
+    tw[key] = w;
+    return wrap;
+  };
+  ttBox.appendChild(ttWheel('start', '블랙 시작'));
+  ttBox.appendChild(ttWheel('end', '블랙 끝'));
+  ttBox.appendChild(ttErr);
+  const mountTT = () => ['start', 'end'].forEach((k) => { tw[k].ap.mount(); tw[k].h.mount(); tw[k].m.mount(); });
+  const tLabel = (x) => `${ampm(x).ap} ${ampm(x).hm}`;
+  const paintNote = () => {
+    if (themePref !== 'time') { tNote.textContent = '이 폰에만 적용돼요. 시스템을 고르면 폰의 밝은 모드, 어두운 모드를 따라가요.'; return; }
+    const dark = inDarkTime(themeTime);
+    tNote.textContent = `지금은 ${dark ? '블랙' : '화이트'}, ${tLabel(dark ? themeTime.end : themeTime.start)}에 ${dark ? '화이트로' : '블랙으로'} 바뀌어요. 이 폰에만 적용돼요.`;
+  };
+  // 휠을 돌리면 바로 적용. 시작과 끝이 같으면 저장하지 않고 이유를 알려 줌
+  function ttChanged() {
+    if (ttDraft.start === ttDraft.end) { ttErr.textContent = '블랙 시작과 끝이 같아요. 다른 시각으로 맞춰 주세요.'; return; }
+    ttErr.textContent = '';
+    themeTime = Object.assign({}, ttDraft);
+    store.set('themeTime', themeTime);
+    applyTheme();
+  }
   const themeRow = chipRow(Object.values(THEME_LABELS), THEME_LABELS[themePref], (label) => {
     themePref = Object.keys(THEME_LABELS).find((k) => THEME_LABELS[k] === label) || 'system';
     store.set('theme', themePref);
-    applyTheme();
+    if (themePref === 'time' && !store.get('themeTime', null)) store.set('themeTime', themeTime);   // 기본값(오후 9:00~오전 7:00)도 남김
+    ttBox.hidden = themePref !== 'time';
+    if (themePref === 'time') requestAnimationFrame(mountTT);
+    applyTheme(); paintNote();
   });
   $('#sTheme', body).appendChild(themeRow.el);
+  ttBox.hidden = themePref !== 'time';
+  themeNote = paintNote;
+  paintNote();
 
   const err = h('p', { class:'err', role:'alert' });
   body.appendChild(err);
@@ -3602,6 +3677,7 @@ function openSettings(first) {
   const save = h('button', { class:'primary', type:'button' }, '저장');
   save.addEventListener('click', async () => {
     err.textContent = '';
+    if (themePref === 'time' && ttDraft.start === ttDraft.end) { err.textContent = '화면의 블랙 시작과 끝이 같아서 저장하지 않았어요. 다른 시각으로 맞춰 주세요.'; return; }
     draft.babyName = $('#sName', body).value.trim();
     const b = $('#sBirth', body).value;
     draft.birth = /^\d{4}-\d{2}-\d{2}$/.test(b) ? b : '';
@@ -3632,6 +3708,7 @@ function openSettings(first) {
   });
   foot.appendChild(save);
   openSheet({ title:first ? '시작하기' : '설정', iconName:'gear', color:'muted', body, footer:foot });
+  if (themePref === 'time') requestAnimationFrame(mountTT);
 }
 
 function askLocalUpload() {
@@ -3731,6 +3808,7 @@ function boot() {
   const tick = () => {
     const t = todayStr();
     if (t !== lastDay) { if (view === lastDay) view = t; lastDay = t; }
+    if (themePref === 'time') applyTheme();   // 시간 테마: 켜 둔 채 시각이 지나거나 다시 보일 때 맞춤
     render();
   };
   setInterval(() => { if (!document.hidden) tick(); }, 30000);
