@@ -539,7 +539,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -1232,10 +1232,16 @@ let sheet = null;
 let ignorePop = 0;
 const useHistory = !PREVIEW && typeof history !== 'undefined' && !!history.pushState;
 
-function openSheet({ title, iconName, color, body, footer, onClose, tall }) {
-  // 창을 다른 창으로 바꿔 열 때는 뒤로가기 기록을 새로 만들지 않고 이어서 씀(뒤로가기가 두 번 일어나 앱을 벗어나지 않게)
-  const inherit = !!(sheet && sheet.pushed);
-  closeSheet(true, false, inherit);
+/* 뒤로가기 기록(1.5.1)
+   - 창을 처음 열 때(사람이 누름) 항목 하나를 쌓는다.
+   - stack: 열린 창 위에 겹쳐 여는 창(달력 S1 위 일정 창 S2). 아래 창의 항목은 두고 항목을 하나 더 쌓는다.
+   - reuse: 겹친 창에서 아래 창으로 돌아갈 때. 남아 있는 아래 항목(S1)을 이어 쓰고 새로 쌓지 않는다.
+   - 그 밖에 창을 다른 창으로 바꿔 열 때도 지금 항목을 이어 쓴다.
+   - popstate 처리 중에는 절대 쌓지 않는다(크롬은 사람이 누르지 않고 쌓은 항목을 뒤로가기에서 건너뛰어 앱이 닫힘). */
+let inPop = false;
+function openSheet({ title, iconName, color, body, footer, onClose, tall, stack, reuse }) {
+  const inherit = !stack && !!(sheet && sheet.pushed);
+  closeSheet(true, false, true);   // 열린 창은 기록을 그대로 두고 닫음
   $('#toast').classList.remove('show');
   const back = h('div', { class:'backdrop' });
   const box = h('section', { class:`sheet${tall ? ' tall' : ''}`, role:'dialog', 'aria-modal':'true', 'aria-label':title });
@@ -1253,8 +1259,8 @@ function openSheet({ title, iconName, color, body, footer, onClose, tall }) {
   back.addEventListener('click', () => closeSheet());
   x.addEventListener('click', () => closeSheet());
   dragClose(head, box, back);
-  if (inherit) sheet.pushed = true;
-  else if (useHistory) { try { history.pushState({ babylogSheet:1 }, ''); sheet.pushed = true; } catch (e) {} }
+  if (inherit || (reuse && useHistory)) sheet.pushed = true;
+  else if (useHistory && !inPop) { try { history.pushState({ babylogSheet:1 }, ''); sheet.pushed = true; } catch (e) {} }
   return box;
 }
 function closeSheet(silent, fromPop, keepHistory) {
@@ -1268,8 +1274,11 @@ function closeSheet(silent, fromPop, keepHistory) {
 }
 window.addEventListener('popstate', () => {
   if (ignorePop > 0) { ignorePop--; return; }
-  if (viewer) { closeViewer(true); return; }
-  if (sheet) closeSheet(false, true);
+  inPop = true;
+  try {
+    if (viewer) { closeViewer(true); return; }
+    if (sheet) closeSheet(false, true);
+  } finally { inPop = false; }
 });
 document.addEventListener('keydown', (e) => {
   if (viewer) {
@@ -2548,11 +2557,11 @@ function renderEvents() {
 }
 
 /* 일정 화면: 달력 + 고른 날부터 60일 목록 */
-function openEvents(selDate, monthKey) {
+function openEvents(selDate, monthKey, reuse) {
   let sel = selDate || todayStr();
   let mon = monthKey || sel.slice(0, 7);
   const body = h('div', { class:'evcal' });
-  const back = () => openEvents(sel, mon);
+  const back = () => openEvents(sel, mon, true);   // 일정 창에서 돌아올 때는 달력 항목(S1)을 이어 씀
   const item = (e, now) => {
     const tm = e.time ? `<small>${ampm(e.time).ap}</small><span class="num">${ampm(e.time).hm}</span>` : '<small>하루</small><span class="big">종일</span>';
     const range = e.end ? `${parseD(e.date).getDate()}일~${parseD(e.end).getDate()}일` : '';
@@ -2609,7 +2618,7 @@ function openEvents(selDate, monthKey) {
   const add = h('button', { class:'primary', type:'button' }, '+ 일정 추가');
   add.addEventListener('click', () => openEventSheet(null, sel, back));
   foot.appendChild(add);
-  openSheet({ title:'일정', iconName:'calendar', color:'p-all', body, footer:foot, tall:true });
+  openSheet({ title:'일정', iconName:'calendar', color:'p-all', body, footer:foot, tall:true, reuse:!!reuse });
   paint();
 }
 
@@ -2744,7 +2753,8 @@ function openEventSheet(existing, date, back) {
       if (!armed) { armed = true; del.classList.add('armed'); del.textContent = '한 번 더 누르면 삭제'; armTimer = setTimeout(() => { armed = false; del.classList.remove('armed'); del.textContent = '삭제'; }, 3000); return; }
       clearTimeout(armTimer);
       const old = removeEvent(existing.id);
-      if (back) back(); else closeSheet(true);   // 일정 화면에서 열었으면 그 화면으로 바꿔 엶
+      closeSheet(true);   // 일정 창 항목을 빼고(달력에서 열었으면 S2)
+      if (back) back();   // 달력은 남은 S1을 이어 씀
       toast(`${old ? old.title : ''} 일정을 지웠어요`, { label:'되돌리기', run:() => { if (old) putEvent(Object.assign({}, old)); } });
     });
     foot.appendChild(del);
@@ -2761,11 +2771,13 @@ function openEventSheet(existing, date, back) {
     putEvent(ev);
     store.set('evTitles', [title].concat(store.get('evTitles', []).filter((x) => x !== title)).slice(0, 8));
     store.set('evWho', ev.who);
-    if (back) back(); else closeSheet(true);
+    closeSheet(true);
+    if (back) back();
     toast(`${ev.title} 일정을 저장했어요`, { label:'되돌리기', run:() => { if (prev) putEvent(Object.assign({}, prev)); else removeEvent(ev.id); } });
   });
   foot.appendChild(save);
-  openSheet({ title:existing ? '일정' : '일정 추가', iconName:'calendar', color:'p-all', body, footer:foot, onClose:back });
+  // 달력에서 열면(back 있음) 달력 위에 겹쳐 항목을 하나 더 쌓음. 닫기, 끌어내리기, 뒤로가기는 onClose로 달력에 돌아감
+  openSheet({ title:existing ? '일정' : '일정 추가', iconName:'calendar', color:'p-all', body, footer:foot, onClose:back, stack:!!back });
   if (!allDay) requestAnimationFrame(mountWheels);
 }
 
