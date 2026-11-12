@@ -475,7 +475,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -978,9 +978,49 @@ function feverMedHtml(tone, ep) {
   }
   return `<li>${head}</li><li>${feverSub(tone)}</li>`;
 }
+/* 지난 날짜가 발열 기간 안이면 그날 기준 읽기 전용 카드(발열 끝 버튼, 하루 최대 없음) */
+function renderFeverPast(sec, ep) {
+  const s = ep.start, t0 = ampm(s.time);
+  const day = daysBetween(s.date, view) + 1;
+  const endsHere = ep.end && ep.end.date === view;
+  const list = recordsOn(view);
+  const temps = list.filter((r) => r.type === '체온' && hasAmount(r));
+  const top = temps.reduce((m, r) => (!m || Number(r.amount) > Number(m.amount) ? r : m), null);
+  const avg = temps.length ? Math.round(temps.reduce((a, r) => a + Number(r.amount), 0) / temps.length * 10) / 10 : null;
+  const cell = (label, v, sub) => (v == null
+    ? `<div><dt>${label}</dt><dd><span class="soft">기록 없음</span></dd></div>`
+    : `<div><dt>${label}</dt><dd class="${tempClass(v)}"><span class="num">${esc(Number(v).toFixed(1))}</span>℃</dd><p>${esc(sub)}</p></div>`);
+  const tt = top ? ampm(top.time) : null;
+  const med = (tone) => {
+    const name = tone === 'red' ? '해열제 빨강' : '해열제 파랑';
+    const doses = list.filter((r) => r.type === '투약' && feverTone(r.name) === tone);
+    if (!doses.length) return `<li><i class="mdot ${tone}" aria-hidden="true"></i>${name} <span class="soft">이날 기록 없음</span></li>`;
+    const mlOf = (r) => ((r.unit || 'ml') === 'ml' && hasAmount(r) ? Number(r.amount) : null);
+    const allMl = doses.every((r) => mlOf(r) != null);
+    const sum = doses.reduce((a, r) => a + (mlOf(r) || 0), 0);
+    const last = doses.slice().sort(byTimeDesc)[0], lt = ampm(last.time);
+    return `<li>${medDot(last.name)}<b>${name}</b> 이날 ${doses.length}회${allMl ? ` ${esc(fmt(sum, 1))}ml` : ''} (마지막 ${lt.ap} ${lt.hm})</li>`;
+  };
+  const endTxt = ep.end ? (() => { const te = ampm(ep.end.time); return `, ${md(ep.end.date)} ${te.ap} ${te.hm} 끝`; })() : '';
+  sec.innerHTML = `<div class="fv-head">
+      <div class="fv-title"><h2>${ep.n}차 발열 <small>${day}일째${endsHere ? ', 이날 끝남' : ''}</small></h2><p>${esc(md(s.date))} ${t0.ap} ${t0.hm}부터${esc(endTxt)}${s.memo ? `, ${esc(s.memo)}` : ''}</p></div>
+    </div>
+    <dl class="fv-temps">
+      ${cell('이날 최고', top ? top.amount : null, tt ? `${tt.ap} ${tt.hm}` : '')}
+      ${cell('이날 평균', avg, `${temps.length}번 잰 값`)}
+    </dl>
+    <ul class="lines fv-meds">${med('red')}${med('blue')}</ul>
+    <button class="link-btn fv-chart" type="button" data-act="chart" data-ep="${ep.n}">체온 그래프${icon('right')}</button>`;
+}
 function renderFever() {
   const sec = $('#fever');
-  const ep = view === todayStr() ? activeFever() : null;
+  if (view !== todayStr()) {
+    const past = episodeOn(view);
+    sec.hidden = !past;
+    if (past) renderFeverPast(sec, past); else sec.innerHTML = '';
+    return;
+  }
+  const ep = activeFever();
   sec.hidden = !ep;
   if (!ep) { sec.innerHTML = ''; return; }
   const s = ep.start;
@@ -1082,10 +1122,7 @@ function renderGlance() {
     }
   }
   if (foods.length && showTemp) lines.push(`${isToday ? '오늘' : '이날'} 이유식 <b>${foods.length}회${foodG ? `, ${foodG}g` : ''}</b>`);
-  if (!isToday) {
-    const ep = episodeOn(view);
-    if (ep) lines.unshift(`<i class="mdot red" aria-hidden="true"></i><b>${ep.n}차 발열</b> ${daysBetween(ep.start.date, view) + 1}일째${ep.end && ep.end.date === view ? ', 이날 끝남' : ''}`);
-  }
+  // 지난 날짜의 'N차 발열 M일째'는 위 발열 카드(renderFeverPast)에 나옴
   $('#glance').innerHTML = hero + stats + (lines.length ? `<ul class="lines">${lines.map((l) => `<li>${l}</li>`).join('')}</ul>` : '');
 }
 
@@ -3121,7 +3158,10 @@ function boot() {
     const b = e.target.closest('[data-act]');
     if (!b) return;
     if (b.dataset.act === 'end') openRecord('발열');
-    else if (b.dataset.act === 'chart') openCharts();
+    else if (b.dataset.act === 'chart') {
+      if (b.dataset.ep) { chartPrefs.fever = b.dataset.ep; saveChartPrefs(); }   // 지난 날짜 카드는 그 발열 기간 그래프로
+      openCharts();
+    }
   });
   $('#pics').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
