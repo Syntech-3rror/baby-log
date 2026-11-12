@@ -1,5 +1,5 @@
 // 반짝이: 인터넷이 끊겨도 앱 화면이 열리도록 기본 파일을 저장해 둡니다.
-const CACHE = 'babylog-v1.5.1';
+const CACHE = 'babylog-v1.6.0';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (event) => {
