@@ -360,6 +360,7 @@ svg{display:block}
 .field-head .field-label{margin:0}
 .text-btn{height:32px;padding:0 4px;color:var(--muted);font-size:14px;text-decoration:underline;text-underline-offset:4px}
 .chip.removable{background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--danger);color:var(--danger)}
+.ev-quick .chip{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
 .chip .x{margin-left:6px;font-size:17px;line-height:1}
 .add-row{display:flex;gap:8px;align-items:center;margin-top:10px}
 .add-row .text-input{margin-top:0;flex:1}
@@ -541,7 +542,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -2455,6 +2456,23 @@ const EV_WHO = ['아기', '아빠', '엄마', '같이'];
 const EV_COLOR = { '아기':'p-baby', '아빠':'p-dad', '엄마':'p-mom', '같이':'p-all' };
 const EV_SEEDS = ['소아과', '예방접종', '회식', '약속'];
 const EV_MINS = ['00', '10', '20', '30', '40', '50'];
+/* 빠른 제목(1.6.1): 이 폰에서 최근 저장한 제목 5개(evTitles) + 기본 제목 중 뺀 것(evHidden) 빼고, 합쳐 6개까지 */
+const EV_RECENT = 5;
+if (!PREVIEW && store.get('evTitlesReset', '') !== '1.6.1') {   // 1.6.1 처음 열 때 한 번: 지운 시험 일정 제목이 쌓여 있어서 비움
+  store.set('evTitles', []); store.set('evTitlesReset', '1.6.1');
+}
+const quickTitles = () => {
+  const hid = store.get('evHidden', []);
+  return Array.from(new Set(store.get('evTitles', []).concat(EV_SEEDS.filter((x) => !hid.includes(x))))).slice(0, 6);
+};
+// 그 제목을 쓰는 일정이 하나도 안 남으면 최근 제목에서 뺌(이 폰에서 지웠거나 다른 폰에서 지워 목록에서 빠졌을 때)
+function pruneTitles() {
+  const used = new Set(Object.values(events).map((e) => e.title));
+  const cur = store.get('evTitles', []);
+  const next = cur.filter((x) => used.has(x));
+  if (next.length !== cur.length) store.set('evTitles', next);
+}
+const eulReul = (w) => { const c = w.charCodeAt(w.length - 1); return c >= 0xAC00 && c <= 0xD7A3 && (c - 0xAC00) % 28 ? '을' : '를'; };
 let events = PREVIEW ? {} : store.get('events', {});
 let eventsVer = PREVIEW ? 0 : store.get('eventsVer', -1);
 let eventOutbox = PREVIEW ? [] : store.get('eventOutbox', []);
@@ -2531,6 +2549,7 @@ function removeEvent(id) {
   const old = events[id];
   delete events[id];
   if (!PREVIEW) queueEvent({ op:'delete', id });
+  pruneTitles();
   saveEvents(); render(); scheduleSync();
   return old;
 }
@@ -2541,6 +2560,7 @@ function mergeEvents(list) {
   list.map(normEvent).filter((e) => e.id && !pend.has(e.id)).forEach((e) => { next[e.id] = e; });
   pend.forEach((id) => { if (events[id]) next[id] = events[id]; });
   events = next;
+  pruneTitles();
 }
 async function sendEvents() {
   let guard = 0;
@@ -2685,14 +2705,36 @@ function openEventSheet(existing, date, back) {
   f1.appendChild(h('span', { class:'field-label' }, '무슨 일정'));
   const titleIn = h('input', { class:'text-input', placeholder:'예: 소아과', maxlength:'30', autocomplete:'off', enterkeyhint:'done', 'aria-label':'무슨 일정' });
   titleIn.value = st.title || '';
-  const quick = Array.from(new Set(store.get('evTitles', []).concat(EV_SEEDS))).slice(0, 6);   // 이 폰에서 최근 쓴 제목 먼저
   const qrow = h('div', { class:'chips ev-quick' });
   qrow.style.marginTop = '10px';
+  // 칩을 0.5초 누르면 빠른 제목에서 뺌(되돌리기 있음). 누른 채 움직이면 취소, 짧게 누르면 제목 넣기
+  const dropQuick = (q) => {
+    const prevT = store.get('evTitles', []), prevH = store.get('evHidden', []);
+    store.set('evTitles', prevT.filter((x) => x !== q));
+    if (EV_SEEDS.includes(q) && !prevH.includes(q)) store.set('evHidden', prevH.concat(q));
+    drawQuick();
+    toast(`${q}${eulReul(q)} 빠른 제목에서 뺐어요`, { label:'되돌리기', run:() => { store.set('evTitles', prevT); store.set('evHidden', prevH); drawQuick(); } });
+  };
+  const holdChip = (b, q) => {
+    let timer = 0, sx = 0, sy = 0, fired = false;
+    const stop = () => { clearTimeout(timer); timer = 0; };
+    b.addEventListener('pointerdown', (e) => {
+      fired = false; sx = e.clientX; sy = e.clientY; stop();
+      timer = setTimeout(() => { timer = 0; fired = true; dropQuick(q); }, 500);
+    });
+    b.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) stop(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((t) => b.addEventListener(t, stop));
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+    b.addEventListener('click', (e) => {
+      if (fired) { fired = false; e.preventDefault(); return; }   // 길게 누른 뒤의 클릭은 무시
+      titleIn.value = q; err.textContent = ''; drawQuick();
+    });
+  };
   const drawQuick = () => {
     qrow.innerHTML = '';
-    quick.forEach((q) => {
+    quickTitles().forEach((q) => {
       const b = h('button', { class:'chip', type:'button', 'aria-pressed':String(titleIn.value.trim() === q) }, esc(q));
-      b.addEventListener('click', () => { titleIn.value = q; err.textContent = ''; drawQuick(); });
+      holdChip(b, q);
       qrow.appendChild(b);
     });
   };
@@ -2805,10 +2847,11 @@ function openEventSheet(existing, date, back) {
       const yearly = isYearly(existing);
       if (!armed) { armed = true; del.classList.add('armed'); del.textContent = yearly ? '모든 해에서 지워져요. 한 번 더 누르면 삭제' : '한 번 더 누르면 삭제'; armTimer = setTimeout(() => { armed = false; del.classList.remove('armed'); del.textContent = '삭제'; }, 3000); return; }
       clearTimeout(armTimer);
+      const titlesBefore = store.get('evTitles', []);
       const old = removeEvent(existing.id);
       closeSheet(true);   // 일정 창 항목을 빼고(달력에서 열었으면 S2)
       if (back) back();   // 달력은 남은 S1을 이어 씀
-      toast(`${old ? old.title : ''} 일정을 ${yearly ? '모든 해에서 ' : ''}지웠어요`, { label:'되돌리기', run:() => { if (old) putEvent(Object.assign({}, old)); } });
+      toast(`${old ? old.title : ''} 일정을 ${yearly ? '모든 해에서 ' : ''}지웠어요`, { label:'되돌리기', run:() => { if (old) { putEvent(Object.assign({}, old)); store.set('evTitles', titlesBefore); } } });
     });
     foot.appendChild(del);
   }
@@ -2823,7 +2866,8 @@ function openEventSheet(existing, date, back) {
     const ev = normEvent(Object.assign({}, st, { title, time, repeat, end:!(canRepeat && repeat) && st.end && st.end > st.date ? st.end : '', memo:String(st.memo || '').trim().slice(0, 300) }));
     ev.createdAt = existing ? existing.createdAt : '';
     putEvent(ev);
-    store.set('evTitles', [title].concat(store.get('evTitles', []).filter((x) => x !== title)).slice(0, 8));
+    store.set('evTitles', [title].concat(store.get('evTitles', []).filter((x) => x !== title)).slice(0, EV_RECENT));
+    store.set('evHidden', store.get('evHidden', []).filter((x) => x !== title));   // 뺀 기본 제목도 저장하면 다시 나옴
     store.set('evWho', ev.who);
     closeSheet(true);
     if (back) back();
