@@ -303,6 +303,11 @@ svg{display:block}
 .ev-end .when-row{margin-top:10px}
 .ev-end .chip{flex:none;height:auto;min-height:64px;border-radius:18px;padding:0 16px}
 .tt-field{margin-top:14px}
+.sub-h{margin:16px 2px 8px;font-size:14px;font-weight:400;color:var(--muted)}
+.push-hours{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.stepper{display:flex;align-items:center;gap:10px}
+.stepper .chip{width:48px;height:48px;padding:0;font-size:22px}
+.stepper b{min-width:96px;text-align:center;font-size:18px}
 .tt-field .twheel{margin-top:6px}
 .ev-yearly{display:flex;width:100%;height:48px;margin-top:10px;align-items:center;justify-content:center}
 .ev-rep-note{margin:8px 2px 0;font-size:14px;line-height:1.45;color:var(--muted)}
@@ -551,7 +556,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -662,7 +667,7 @@ function setFoods(list) {
   scheduleSync();
 }
 
-const saveCfg = () => store.set('config', cfg);
+const saveCfg = () => { store.set('config', cfg); swCfg(); };   // 서비스워커용 사본도(막수 알림)
 const saveRecords = () => store.set('records', records);
 const saveOutbox = () => store.set('outbox', outbox);
 
@@ -917,7 +922,7 @@ async function sync() {
     }
     const act = activeFever();
     const from = act && act.start.date < addDays(view, -2) && view === todayStr() ? act.start.date : addDays(view, -2), to = view;
-    const res = await api('sync', { from, to, photosVer, eventsVer });
+    const res = await api('sync', { from, to, photosVer, eventsVer, device:pushDevice() });
     if (Array.isArray(res.fevers)) { feverSrv = res.fevers.map(normalize); store.set('fevers', feverSrv); }
     if (res.photosVer === undefined) photoSupport = 'no';   // 사진 기능이 없는 예전 연결 코드
     else {
@@ -940,6 +945,7 @@ async function sync() {
       }
     }
     saveEvents();
+    takePush(res.push);
     if (res.prefs && Array.isArray(res.prefs.foods) && !foodsDirty) { foodList = res.prefs.foods.slice(0, 40); store.set('foods', foodList); }
     const pend = pendingIds();
     const seen = new Set();
@@ -2908,6 +2914,156 @@ function openEventSheet(existing, date, back) {
   if (!allDay) requestAnimationFrame(mountWheels);
 }
 
+/* ---------- 막수 알림 (1.8.0) ---------- */
+// 마지막 수유 뒤 정한 시간이 지나면 연결 코드(Apps Script)가 웹 푸시를 보냄. 받을지는 폰마다, 몇 시간과 밤 시간은 가족 공통
+let pushInfo = PREVIEW ? null : store.get('push', null);   // sync가 주는 { key, hours, quietStart, quietEnd, mine }. null이면 알림을 모르는 연결 코드
+let pushHealTried = false;
+function pushDevice() {
+  let d = store.get('pushDevice', '');
+  if (!d) { d = newId(); store.set('pushDevice', d); }
+  return d;
+}
+const pushCapable = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushWanted = () => !!store.get('pushOn', false) && pushCapable() && Notification.permission === 'granted';
+const hoursLabel = (x) => `${Math.floor(x)}시간${x % 1 ? ' 30분' : ''}`;
+// 서비스워커가 알림 문구를 물어볼 때 쓰게 IndexedDB에도 연결 주소, 가족 코드, 이 폰 id를 둠
+function swCfg() {
+  if (PREVIEW || !('indexedDB' in window)) return;
+  try {
+    const req = indexedDB.open('babylog', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => {
+      const db = req.result, tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put({ apiUrl:cfg.apiUrl || '', code:cfg.code || '', device:pushDevice() }, 'cfg');
+      tx.oncomplete = () => db.close();
+    };
+  } catch (e) {}
+}
+function takePush(p) {
+  if (p && typeof p === 'object') {
+    pushInfo = p; store.set('push', p);
+    // 이 폰은 켜 뒀는데 연결 코드에 없으면(지워졌거나 키가 바뀜) 한 번 조용히 다시 등록
+    if (!p.mine && p.key && pushWanted() && !pushHealTried) { pushHealTried = true; pushOn().catch(() => {}); }
+  } else { pushInfo = null; store.set('push', null); }
+}
+const b64uBytes = (x) => { const b = atob(x.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - x.length % 4) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+// 켜기: 권한을 묻고 구독해서 연결 코드에 등록. 'ok', 'denied', 'unsupported', 'nokey'
+async function pushOn() {
+  if (!pushCapable()) return 'unsupported';
+  if (!pushInfo || !pushInfo.key) return 'nokey';
+  const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm !== 'granted') return 'denied';
+  const reg = await navigator.serviceWorker.ready;
+  const opts = { userVisibleOnly:true, applicationServerKey:b64uBytes(pushInfo.key) };
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe(opts);
+  let res;
+  try { res = await api('pushSub', { device:pushDevice(), endpoint:sub.endpoint }); }
+  catch (e) {
+    if (e.code !== 'bad_endpoint') throw e;
+    await sub.unsubscribe(); sub = await reg.pushManager.subscribe(opts);   // 예전 구독이면 새로
+    res = await api('pushSub', { device:pushDevice(), endpoint:sub.endpoint });
+  }
+  pushInfo = res.push; store.set('push', pushInfo); store.set('pushOn', true); swCfg();
+  return 'ok';
+}
+// 끄기: 구독을 풀고 연결 코드에서도 지움
+async function pushOff() {
+  store.set('pushOn', false);
+  try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) {}
+  const res = await api('pushUnsub', { device:pushDevice() });
+  pushInfo = res.push; store.set('push', pushInfo);
+}
+// 시각 휠(오전/오후, 시, 10분). 밤 시간 시작과 끝에 씀
+function hmWheelField(label, hm, onChange, tag) {
+  const [hh, mm] = hm.split(':').map(Number);
+  const wrap = h('div', { class:'tt-field' });
+  wrap.appendChild(h('span', { class:'field-label' }, label));
+  const box = h('div', { class:'twheel', 'data-qt':tag });
+  box.appendChild(h('div', { class:'tband', 'aria-hidden':'true' }));
+  const on = (v, c) => { if (c) onChange(`${pad((Number(w.h.value) % 12) + (w.ap.value === '오후' ? 12 : 0))}:${w.m.value}`); };
+  const w = {
+    ap:wheel(['오전', '오후'], hh < 12 ? '오전' : '오후', on, { item:48, band:'', label:`${label} 오전 오후`, cls:'ap' }),
+    h:wheel(Array.from({ length:12 }, (_, i) => String(i + 1)), String(hh % 12 === 0 ? 12 : hh % 12), on, { item:48, band:'', label:`${label} 시` }),
+    m:wheel(EV_MINS, pad(Math.round(mm / 10) * 10 % 60), on, { item:48, band:'', label:`${label} 분` }),
+  };
+  box.appendChild(w.ap.el); box.appendChild(w.h.el); box.appendChild(h('span', { class:'colon', 'aria-hidden':'true' }, ':')); box.appendChild(w.m.el);
+  wrap.appendChild(box);
+  return { el:wrap, mount() { w.ap.mount(); w.h.mount(); w.m.mount(); } };
+}
+const PUSH_DENIED = '알림이 막혀 있어요. 폰 설정 > 애플리케이션 > 크롬(또는 반짝이) > 알림에서 허용하거나, 크롬 주소창 왼쪽 아이콘 > 권한 > 알림을 허용한 뒤 다시 켜 주세요.';
+// 설정 화면의 '막수 알림' 칸. 저장 때 가족 공통 값을 보내는 함수를 돌려줌
+function pushSettings(box) {
+  const draft = { hours:pushInfo.hours, quietStart:pushInfo.quietStart, quietEnd:pushInfo.quietEnd };
+  box.innerHTML = `<h3>막수 알림</h3>
+    <p class="note" style="margin-top:0">마지막 수유 뒤 정한 시간이 지나면 '반짝이' 알림이 와요. 밤 시간에는 울리지 않아요.</p>
+    <h4 class="sub-h">이 폰</h4>
+    <div class="row"><button class="chip" type="button" id="sPushOn" aria-pressed="false">이 폰에서 막수 알림 받기</button><button class="chip" type="button" id="sPushTest">시험 알림 보내기</button></div>
+    <p class="note" id="sPushMsg"></p>
+    <h4 class="sub-h">가족 공통</h4>
+    <div class="push-hours"><span class="field-label">마지막 수유 뒤</span><div class="stepper"><button class="chip" type="button" id="sPushMinus" aria-label="30분 줄이기">−</button><b id="sPushHours"></b><button class="chip" type="button" id="sPushPlus" aria-label="30분 늘리기">+</button></div></div>
+    <div id="sPushQuiet"></div>
+    <p class="err" id="sPushErr" role="alert"></p>
+    <p class="note">알림까지 걸리는 시간과 밤 시간은 가족 폰 모두 같이 써요. 아래 저장을 누르면 바뀌어요. 알림을 받을지는 폰마다 따로 정해요.</p>`;
+  const onBtn = $('#sPushOn', box), testBtn = $('#sPushTest', box), msg = $('#sPushMsg', box), err = $('#sPushErr', box);
+  const paintOn = () => {
+    const on = pushWanted();
+    onBtn.setAttribute('aria-pressed', String(on));
+    testBtn.hidden = !on;
+    if (!pushCapable()) { msg.textContent = '이 브라우저에서는 알림을 받을 수 없어요. 아이폰은 Safari에서 홈 화면에 추가한 앱으로 열어야 켤 수 있어요.'; onBtn.hidden = true; return; }
+    if (!pushInfo.key) { msg.textContent = '연결 코드에서 setupPush를 한 번 실행해야 알림을 켤 수 있어요.'; onBtn.disabled = true; return; }
+    if (Notification.permission === 'denied') { msg.textContent = PUSH_DENIED; return; }
+    msg.textContent = on ? '이 폰에서 막수 알림을 받아요. 이 폰에만 적용돼요.' : '이 폰은 알림을 받지 않아요. 켜면 알림 권한을 물어봐요.';
+  };
+  onBtn.addEventListener('click', async () => {
+    onBtn.disabled = true;
+    try {
+      if (pushWanted()) { await pushOff(); paintOn(); }
+      else {
+        const r = await pushOn();
+        paintOn();
+        if (r === 'denied') msg.textContent = PUSH_DENIED;
+      }
+    } catch (e) {
+      paintOn();
+      msg.textContent = e.code === 'offline' || e.code === 'network' ? '인터넷에 연결되지 않아 바꾸지 못했어요. 연결된 뒤 다시 눌러 주세요.' : '알림을 켜지 못했어요. 잠시 뒤 다시 눌러 주세요.';
+    }
+    onBtn.disabled = false;
+  });
+  testBtn.addEventListener('click', async () => {
+    testBtn.disabled = true;
+    try { await api('pushTest', { device:pushDevice() }); msg.textContent = '시험 알림을 보냈어요. 몇 초 안에 와요.'; }
+    catch (e) {
+      msg.textContent = e.code === 'no_sub' ? '먼저 이 폰에서 알림 받기를 켜 주세요.'
+        : e.code === 'gone' ? '알림 구독이 만료됐어요. 알림 받기를 껐다가 다시 켜 주세요.'
+        : e.code === 'offline' || e.code === 'network' ? '인터넷에 연결되지 않아 보내지 못했어요.' : '시험 알림을 보내지 못했어요.';
+    }
+    testBtn.disabled = false;
+  });
+  const hoursEl = $('#sPushHours', box);
+  const paintHours = () => {
+    hoursEl.textContent = hoursLabel(draft.hours);
+    $('#sPushMinus', box).disabled = draft.hours <= 1; $('#sPushPlus', box).disabled = draft.hours >= 6;
+  };
+  $('#sPushMinus', box).addEventListener('click', () => { draft.hours = Math.max(1, draft.hours - 0.5); paintHours(); });
+  $('#sPushPlus', box).addEventListener('click', () => { draft.hours = Math.min(6, draft.hours + 0.5); paintHours(); });
+  const check = () => { err.textContent = draft.quietStart === draft.quietEnd ? '밤 시간 시작과 끝이 같아요. 다른 시각으로 맞춰 주세요.' : ''; };
+  const q1 = hmWheelField('밤 시간 시작', draft.quietStart, (v) => { draft.quietStart = v; check(); }, 'start');
+  const q2 = hmWheelField('밤 시간 끝', draft.quietEnd, (v) => { draft.quietEnd = v; check(); }, 'end');
+  $('#sPushQuiet', box).appendChild(q1.el); $('#sPushQuiet', box).appendChild(q2.el);
+  paintOn(); paintHours();
+  return {
+    mount() { q1.mount(); q2.mount(); },
+    // 저장 때: 바뀐 게 있으면 연결 코드에 보냄. 실패하면 이유 문구
+    async save() {
+      if (draft.quietStart === draft.quietEnd) return '막수 알림의 밤 시간 시작과 끝이 같아서 저장하지 않았어요.';
+      if (draft.hours === pushInfo.hours && draft.quietStart === pushInfo.quietStart && draft.quietEnd === pushInfo.quietEnd) return '';
+      try { const res = await api('pushConfig', Object.assign({ device:pushDevice() }, draft)); pushInfo = res.push; store.set('push', pushInfo); return ''; }
+      catch (e) { return '막수 알림 설정을 연결 코드에 저장하지 못했어요. 인터넷을 확인하고 다시 저장해 주세요.'; }
+    },
+  };
+}
+
 /* ---------- 알림 ---------- */
 let toastTimer = 0;
 function toast(msg, action) {
@@ -3559,6 +3715,7 @@ function openSettings(first) {
       <div class="row"><button class="chip" type="button" id="sTest">연결 확인</button></div>
       <p class="note" id="sMsg"></p>
     </section>
+    <section class="set" id="sPushBox" hidden></section>
     <section class="set" id="sInviteBox"><h3>가족 초대</h3>
       <p class="note" style="margin-top:0">이 링크를 받은 가족은 열기만 하면 같은 기록에 연결돼요. 가족 코드가 들어 있으니 가족에게만 보내세요.</p>
       <div class="row"><button class="chip" type="button" id="sCopy">초대 링크 복사</button><button class="chip" type="button" id="sShare" hidden>공유하기</button></div>
@@ -3648,6 +3805,9 @@ function openSettings(first) {
     $('#sTest', body).addEventListener('click', test);
     body._test = test;
 
+    const pushBox = $('#sPushBox', body);
+    if (pushInfo && connected()) { pushBox.hidden = false; body._push = pushSettings(pushBox); }   // 알림을 아는 연결 코드일 때만
+
     const inviteBox = $('#sInviteBox', body);
     inviteBox.hidden = !connected();
     $('#sCopy', body).addEventListener('click', async () => {
@@ -3678,6 +3838,12 @@ function openSettings(first) {
   save.addEventListener('click', async () => {
     err.textContent = '';
     if (themePref === 'time' && ttDraft.start === ttDraft.end) { err.textContent = '화면의 블랙 시작과 끝이 같아서 저장하지 않았어요. 다른 시각으로 맞춰 주세요.'; return; }
+    if (body._push) {
+      save.disabled = true;
+      const pe = await body._push.save();
+      save.disabled = false;
+      if (pe) { err.textContent = pe; return; }
+    }
     draft.babyName = $('#sName', body).value.trim();
     const b = $('#sBirth', body).value;
     draft.birth = /^\d{4}-\d{2}-\d{2}$/.test(b) ? b : '';
@@ -3709,6 +3875,7 @@ function openSettings(first) {
   foot.appendChild(save);
   openSheet({ title:first ? '시작하기' : '설정', iconName:'gear', color:'muted', body, footer:foot });
   if (themePref === 'time') requestAnimationFrame(mountTT);
+  if (body._push) requestAnimationFrame(() => body._push.mount());
 }
 
 function askLocalUpload() {
@@ -3802,6 +3969,7 @@ function boot() {
   });
 
   const joined = !PREVIEW && handleJoin();
+  if (connected()) swCfg();
   render();
 
   let lastDay = todayStr();
