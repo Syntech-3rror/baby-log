@@ -83,6 +83,20 @@ svg{display:block}
 .baby p{margin:1px 0 0;color:var(--muted);font-size:14px;word-break:keep-all}
 .pill{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:17px;background:var(--surface);font-size:13px;color:var(--muted);white-space:nowrap}
 .pill i{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.up-line{display:flex;justify-content:flex-end}
+.up-line:has(.up-pill[hidden]){display:none}
+.up-pill{height:30px;margin-top:6px;padding:0 12px;font-size:13px}
+.up-pill[data-s="busy"] i{background:var(--photo);animation:upblink 1.2s ease-in-out infinite}
+.up-pill[data-s="bad"]{color:var(--danger)}
+.up-pill[data-s="bad"] i{background:var(--danger)}
+@keyframes upblink{50%{opacity:.35}}
+.upq h4{margin:14px 2px 8px;font-size:14px;font-weight:400;color:var(--muted)}
+.upq-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.upq-list li{display:flex;align-items:center;gap:10px;padding:8px;border-radius:14px;background:var(--surface-2)}
+.upq-list img{width:52px;height:52px;border-radius:10px;object-fit:cover;flex:none;background:var(--line)}
+.upq-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.upq-main small{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis}
+.upq-list .chip{flex:none;height:40px;padding:0 12px;background:var(--surface)}
 .pill[data-s="ok"] i{background:var(--ok)}
 .pill[data-s="wait"] i,.pill[data-s="busy"] i{background:var(--warn)}
 .pill[data-s="busy"] i{animation:blink 1s infinite}
@@ -529,6 +543,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
       <button class="icon-btn" id="chartBtn" type="button" aria-label="그래프"></button>
       <button class="icon-btn" id="settingsBtn" type="button" aria-label="설정"></button>
     </div>
+    <div class="up-line"><button class="pill up-pill" id="upPill" type="button" hidden aria-label="사진 올리기 진행"><i></i><span></span></button></div>
     <nav class="day-nav" aria-label="날짜 이동">
       <button class="arrow" id="prevDay" type="button" aria-label="전날"></button>
       <label class="day-label"><span id="dayText"></span><span class="tag" id="dayTag"></span><input type="date" id="dayInput" aria-label="날짜 고르기"></label>
@@ -556,7 +571,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -2928,16 +2943,9 @@ const pushWanted = () => !!store.get('pushOn', false) && pushCapable() && Notifi
 const hoursLabel = (x) => `${Math.floor(x)}시간${x % 1 ? ' 30분' : ''}`;
 // 서비스워커가 알림 문구를 물어볼 때 쓰게 IndexedDB에도 연결 주소, 가족 코드, 이 폰 id를 둠
 function swCfg() {
-  if (PREVIEW || !('indexedDB' in window)) return;
-  try {
-    const req = indexedDB.open('babylog', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('kv');
-    req.onsuccess = () => {
-      const db = req.result, tx = db.transaction('kv', 'readwrite');
-      tx.objectStore('kv').put({ apiUrl:cfg.apiUrl || '', code:cfg.code || '', device:pushDevice() }, 'cfg');
-      tx.oncomplete = () => db.close();
-    };
-  } catch (e) {}
+  if (PREVIEW || !('indexedDB' in window)) return Promise.resolve();
+  const v = { apiUrl:cfg.apiUrl || '', code:cfg.code || '', device:pushDevice() };
+  return upqTx('kv', 'readwrite', (tx) => { tx.objectStore('kv').put(v, 'cfg'); }).catch(() => {});   // DB 버전 2(1.9.0, 사진 큐와 같이)
 }
 function takePush(p) {
   if (p && typeof p === 'object') {
@@ -3336,6 +3344,353 @@ async function sendPhoto(item, memo) {
   return p;
 }
 
+/* ---------- 사진 올리기 큐 공통(1.9.0) ----------
+   index.html과 sw.js에 똑같이 들어 있음(화면과 서비스워커가 같은 큐를 나눠 올림). 고치면 둘 다 고침. test/upq_same.js가 같은지 봄.
+   큐: IndexedDB 'babylog' > 'upq'(사진 한 장에 한 줄, 원본 Blob 포함). 연결 정보: 'kv' > 'cfg'(1.8.0). 진행 수: 'kv' > 'upqStats'.
+   한 장씩 맡아 감(claimedAt). 맡은 쪽은 20초마다 시각을 새로 적고, 60초 넘게 안 적으면 멈춘 것으로 보고 다른 쪽이 다시 맡음.
+   화면과 서비스워커를 합쳐 한 번에 3장까지. */
+const UPQ_DB = 'babylog', UPQ_VER = 2, UPQ_PAR = 3, UPQ_STALE = 60000, UPQ_BEAT = 20000, UPQ_TRIES = 5;
+const UPQ_HARD = ['decode', 'too_big', 'bad_photo', 'bad_id', 'bad_date', 'bad_time', 'bad_code', 'unknown_action'];   // 다시 해도 안 되는 것
+function upqOpen() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(UPQ_DB, UPQ_VER);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('upq')) db.createObjectStore('upq', { keyPath:'id' });
+    };
+    r.onsuccess = () => { const db = r.result; db.onversionchange = () => db.close(); resolve(db); };
+    r.onerror = () => reject(r.error || new Error('idb'));
+    r.onblocked = () => reject(new Error('idb_blocked'));
+  });
+}
+// 한 트랜잭션 안에서 fn(tx, set). fn 안에서는 요청 콜백으로만 이어 감(await 하면 트랜잭션이 끝남)
+function upqTx(stores, mode, fn) {
+  return upqOpen().then((db) => new Promise((resolve, reject) => {
+    let out;
+    const tx = db.transaction(stores, mode);
+    tx.oncomplete = () => { db.close(); resolve(out); };
+    tx.onerror = tx.onabort = () => { db.close(); reject(tx.error || new Error('idb_tx')); };
+    fn(tx, (v) => { out = v; });
+  }));
+}
+const upqList = () => upqTx('upq', 'readonly', (tx, set) => { const r = tx.objectStore('upq').getAll(); r.onsuccess = () => set(r.result || []); });
+const upqKv = (k) => upqTx('kv', 'readonly', (tx, set) => { const r = tx.objectStore('kv').get(k); r.onsuccess = () => set(r.result); });
+const upqDel = (id) => upqTx('upq', 'readwrite', (tx) => { tx.objectStore('upq').delete(id); });
+// 있는 줄만 고침(그사이 '빼기'로 지웠으면 되살리지 않음)
+function upqPatch(id, patch, onlyOwner) {
+  return upqTx('upq', 'readwrite', (tx, set) => {
+    const st = tx.objectStore('upq');
+    const r = st.get(id);
+    r.onsuccess = () => {
+      const it = r.result;
+      if (!it || (onlyOwner && it.claimedBy !== onlyOwner)) { set(false); return; }
+      st.put(Object.assign(it, typeof patch === 'function' ? patch(it) : patch));
+      set(true);
+    };
+  });
+}
+// 진행 수 더하기(done, fail). 큐가 비었다가 새로 들어오면 upqAdd가 새로 셈
+function upqCount(field, n) {
+  return upqTx('kv', 'readwrite', (tx) => {
+    const st = tx.objectStore('kv');
+    const r = st.get('upqStats');
+    r.onsuccess = () => { const s = r.result || { total:0, done:0, fail:0, notified:true }; s[field] = (s[field] || 0) + (n || 1); st.put(s, 'upqStats'); };
+  });
+}
+// 하나 맡기: 살아 있는 맡음이 3개 미만일 때 기다리는 것 중 먼저 넣은 것. canSmall이 아니면 보기용이 이미 있는 것만
+function upqClaim(owner, canSmall) {
+  const now = Date.now();
+  return upqTx('upq', 'readwrite', (tx, set) => {
+    const st = tx.objectStore('upq');
+    const r = st.getAll();
+    r.onsuccess = () => {
+      const all = r.result || [];
+      const held = (x) => x.claimedAt && now - x.claimedAt < UPQ_STALE;
+      const wait = all.filter((x) => x.state === 'wait');
+      if (wait.filter(held).length >= UPQ_PAR) { set(null); return; }
+      const it = wait.filter((x) => !held(x) && (canSmall || (x.view && x.thumb)) && !(x.nextAt > now))
+        .sort((a, b) => (a.addedAt - b.addedAt) || (a.seq - b.seq))[0];
+      if (!it) { set(null); return; }
+      it.claimedAt = now; it.claimedBy = owner;
+      st.put(it);
+      set(it);
+    };
+  });
+}
+function upqB64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = () => reject(r.error || new Error('read'));
+    r.readAsDataURL(blob);
+  });
+}
+const upqErr = (code) => Object.assign(new Error(code), { code });
+// 한 장 보내기. 보기용과 썸네일이 없으면 만들어 큐에 적어 둠(다시 할 때 또 안 만들게)
+async function upqSend(it, cfg, env) {
+  if (!it.view || !it.thumb) {
+    const s = await env.small(it.file);
+    if (!s || !s.view || !s.thumb) throw upqErr('decode');
+    Object.assign(it, s);
+    await upqPatch(it.id, { view:s.view, thumb:s.thumb, w:s.w, h:s.h });
+  }
+  const photo = {
+    id:it.id, date:it.date, time:it.time, memo:it.memo || '', name:it.name, mime:it.mime, w:it.w, h:it.h, size:it.size, createdAt:it.createdAt,
+    original:await upqB64(it.file), view:await upqB64(it.view), thumb:await upqB64(it.thumb),
+  };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 240000);
+  let res;
+  try {
+    res = await fetch(cfg.apiUrl, { method:'POST', body:JSON.stringify({ action:'photoAdd', code:cfg.code, v:env.v, photo }), signal:ctrl.signal, redirect:'follow' });
+  } catch (e) { throw upqErr('network'); } finally { clearTimeout(timer); }
+  let data;
+  try { data = await res.json(); } catch (e) { throw upqErr('network'); }
+  if (!data || !data.ok) throw upqErr((data && data.error) || 'error');
+  if (!data.photo) throw upqErr('error');
+  return data;
+}
+const upqSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* 큐 올리기. env: { owner, v, small(blob)→{view, thumb, w, h}|null 또는 없음, deadline(그 뒤로는 새로 안 맡음, 0이면 없음),
+   keepGoing()→false면 새로 안 맡음, onDone(data, it), onChange(), visible()→Promise<bool>, notify(title, body), finishedHere(stats, failed) }
+   돌려줌: { left(아직 기다리는 장수), offline } */
+async function upqRun(env) {
+  const cfg = await upqKv('cfg');
+  if (!cfg || !cfg.apiUrl || !cfg.code) return { left:(await upqList()).filter((x) => x.state === 'wait').length, offline:false };
+  const canSmall = !!env.small;
+  let offline = false;
+  const worker = async () => {
+    for (;;) {
+      if (offline || (env.deadline && Date.now() > env.deadline) || (env.keepGoing && !env.keepGoing())) return;
+      const it = await upqClaim(env.owner, canSmall);
+      if (!it) {
+        const now = Date.now();
+        const mine = (await upqList()).filter((x) => x.state === 'wait' && (canSmall || (x.view && x.thumb)));
+        if (!mine.length) return;
+        await upqSleep(mine.every((x) => x.nextAt > now) ? Math.min(5000, Math.max(500, Math.min(...mine.map((x) => x.nextAt)) - now)) : 1500);   // 남이 맡고 있거나 3장이 찼으면 기다림
+        continue;
+      }
+      if (env.onChange) env.onChange();
+      const beat = setInterval(() => { upqPatch(it.id, { claimedAt:Date.now() }, env.owner).catch(() => {}); }, UPQ_BEAT);
+      try {
+        const data = await upqSend(it, cfg, env);
+        await upqDel(it.id);
+        await upqCount('done');
+        if (env.onDone) await env.onDone(data, it);
+      } catch (e) {
+        const code = e.code || 'error';
+        const net = code === 'network';
+        if (net && typeof navigator !== 'undefined' && navigator.onLine === false) offline = true;   // 끊김: 횟수에 안 셈, 이번엔 그만
+        const tries = (it.tries || 0) + (offline ? 0 : 1);
+        const hard = UPQ_HARD.includes(code) || tries >= (net ? UPQ_TRIES * 2 : UPQ_TRIES);   // 연결 문제는 조금 더 기다려 봄
+        await upqPatch(it.id, { state:hard ? 'fail' : 'wait', err:code, tries, claimedAt:0, claimedBy:'', nextAt:hard || offline ? 0 : Date.now() + Math.min(60000, 3000 * tries) });
+        if (hard) await upqCount('fail');
+      } finally {
+        clearInterval(beat);
+        if (env.onChange) env.onChange();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length:UPQ_PAR }, worker));
+  const all = await upqList();
+  const left = all.filter((x) => x.state === 'wait').length;
+  if (!left) await upqFinish(env, all.filter((x) => x.state === 'fail').length);
+  return { left, offline };
+}
+// 다 끝났을 때 한 번(어느 쪽이 끝내든 한 번만): 앱이 화면에 없고 알림 권한이 있으면 알림(권한은 묻지 않음). 화면에 있으면 finishedHere
+async function upqFinish(env, failed) {
+  const s = await upqTx('kv', 'readwrite', (tx, set) => {
+    const st = tx.objectStore('kv');
+    const r = st.get('upqStats');
+    r.onsuccess = () => { const o = r.result; if (!o || o.notified) { set(null); return; } o.notified = true; st.put(o, 'upqStats'); set(o); };
+  });
+  if (!s || (!s.done && !failed)) return;
+  try {
+    if (await env.visible()) { if (env.finishedHere) env.finishedHere(s, failed); return; }
+    await env.notify('반짝이', failed ? `사진 ${s.done}장 올렸어요. ${failed}장은 못 올렸어요.` : `사진 ${s.done}장 다 올렸어요`);
+  } catch (e) { /* 알림을 못 띄워도 그만 */ }
+}
+/* ---------- 사진 올리기 큐 공통 끝 ---------- */
+
+/* ---------- 사진 올리기 큐(화면 쪽, 1.9.0) ---------- */
+// 올리기를 누르면 원본과 정보를 큐에 넣고 창은 바로 닫음. 백그라운드 동기화가 되면 서비스워커가 앱을 나가도 올리고,
+// 화면이 켜져 있는 동안에는 화면도 같은 큐에서 나눠 맡음(합쳐 3장씩)
+const upqOwner = `page-${newId()}`;
+let upqBusy = false, upqPollT = 0, upqView = null;
+const canBgSync = () => 'serviceWorker' in navigator && 'SyncManager' in window;
+async function upqSmallPage(blob) {
+  const d = await decodePhoto(blob);
+  if (!d || !d.w) return null;
+  try {
+    const view = await scaleJpeg(d, 1600, 0.82), thumb = await scaleJpeg(d, 480, 0.74);
+    return view && thumb ? { view, thumb, w:d.w, h:d.h } : null;
+  } finally { d.done(); }
+}
+// 큐에 넣기. 큐에 기다리는 게 없었으면 진행 수를 새로 셈
+function upqAdd(list, memo) {
+  const now = Date.now(), at = new Date().toISOString();
+  return upqTx(['upq', 'kv'], 'readwrite', (tx) => {
+    const st = tx.objectStore('upq'), kv = tx.objectStore('kv');
+    const r = st.getAll();
+    r.onsuccess = () => {
+      const waiting = (r.result || []).some((x) => x.state === 'wait');
+      list.forEach((x, i) => st.put({ id:`p${newId()}`, seq:i, addedAt:now, state:'wait', tries:0, err:'', claimedAt:0, claimedBy:'', nextAt:0,
+        file:x.blob, name:x.name, size:x.size, mime:x.mime, date:x.when.date, time:x.when.time, memo, createdAt:at, w:0, h:0 }));
+      const g = kv.get('upqStats');
+      g.onsuccess = () => {
+        const o = g.result;
+        kv.put(waiting && o ? Object.assign(o, { total:o.total + list.length, notified:false }) : { total:list.length, done:0, fail:o ? o.fail || 0 : 0, notified:false }, 'upqStats');
+      };
+    };
+  });
+}
+// 못 올린 사진 다시 올리기, 빼기
+function upqRequeue(ids) {
+  return upqTx(['upq', 'kv'], 'readwrite', (tx) => {
+    const st = tx.objectStore('upq'), kv = tx.objectStore('kv');
+    const r = st.getAll();
+    r.onsuccess = () => {
+      const all = r.result || [];
+      const waiting = all.some((x) => x.state === 'wait');
+      const back = all.filter((x) => ids.includes(x.id) && x.state === 'fail');
+      back.forEach((x) => st.put(Object.assign(x, { state:'wait', tries:0, err:'', claimedAt:0, claimedBy:'', nextAt:0 })));
+      const g = kv.get('upqStats');
+      g.onsuccess = () => {
+        const o = g.result || { total:0, done:0, fail:0 };
+        const fail = Math.max(0, (o.fail || 0) - back.length);
+        kv.put(waiting ? Object.assign(o, { total:o.total + back.length, fail, notified:false }) : { total:back.length, done:0, fail, notified:false }, 'upqStats');
+      };
+    };
+  });
+}
+function upqRemove(id) {
+  return upqTx(['upq', 'kv'], 'readwrite', (tx) => {
+    const st = tx.objectStore('upq'), kv = tx.objectStore('kv');
+    const r = st.get(id);
+    r.onsuccess = () => {
+      const it = r.result;
+      if (!it || (it.claimedAt && Date.now() - it.claimedAt < UPQ_STALE)) return;   // 올리는 중이면 못 뺌
+      st.delete(id);
+      const g = kv.get('upqStats');
+      g.onsuccess = () => { const o = g.result; if (!o) return; if (it.state === 'fail') o.fail = Math.max(0, (o.fail || 0) - 1); else o.total = Math.max(0, o.total - 1); kv.put(o, 'upqStats'); };
+    };
+  });
+}
+// 앱을 다시 열면 바로 이어서: 예전 화면이 맡다가 멈춘 사진은 놓아 줌(서비스워커가 맡은 건 그대로)
+function upqReleaseOld() {
+  return upqTx('upq', 'readwrite', (tx) => {
+    const st = tx.objectStore('upq');
+    const r = st.getAll();
+    r.onsuccess = () => (r.result || []).forEach((x) => { if (x.claimedBy && x.claimedBy.startsWith('page-') && x.claimedBy !== upqOwner) st.put(Object.assign(x, { claimedAt:0, claimedBy:'' })); });
+  });
+}
+async function upqDonePage(data, it) {
+  const p = normPhoto(data.photo);
+  if (it && it.thumb) await pput(`t/${p.id}`, it.thumb);
+  if (it && it.view) await pput(`v/${p.id}`, it.view);
+  upqGotPhoto(p);
+}
+function upqGotPhoto(p) {
+  photos = photos.filter((x) => x.id !== p.id).concat(p);
+  savePhotos();
+  picsSig = ''; renderPics();
+  if (albumRedraw) albumRedraw();
+}
+function upqFinishToast(done, failed) {
+  if (failed) toast(`사진 ${done}장 올렸고 ${failed}장은 못 올렸어요`, { label:'보기', run:openUpQueue });
+  else if (done) toast(`사진 ${done}장 올렸어요`, { label:'앨범 보기', run:() => openAlbum() });
+}
+async function upqNotifyPage(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;   // 권한은 묻지 않음
+  const reg = await navigator.serviceWorker.ready;
+  await reg.showNotification(title, { body, tag:'babylog-photos', icon:'icon-192.png', badge:'badge-96.png', data:{ url:reg.scope, album:true } });
+}
+// 올리기 시작: 서비스워커에 백그라운드 동기화를 걸고, 화면이 보이면 화면도 같이 올림
+async function startUploads() {
+  if (PREVIEW || !connected() || !('indexedDB' in window)) return;
+  await swCfg();
+  if (canBgSync()) {
+    try { const reg = await navigator.serviceWorker.ready; await reg.sync.register('photo-upload'); } catch (e) {}
+  }
+  runPageUploads();
+}
+async function runPageUploads() {
+  if (upqBusy || document.hidden) return;
+  upqBusy = true;
+  upqPaint();
+  try {
+    const r = await upqRun({ owner:upqOwner, v:VERSION, small:upqSmallPage, deadline:0, keepGoing:() => !document.hidden,
+      onDone:upqDonePage, onChange:upqPaint, visible:async () => !document.hidden, notify:upqNotifyPage, finishedHere:(st, failed) => upqFinishToast(st.done, failed) });
+    if (r.offline) toast('인터넷이 연결되면 남은 사진을 이어서 올려요');
+  } catch (e) { /* 다음에 다시 */ }
+  upqBusy = false;
+  upqPaint();
+}
+// 화면 위 작은 진행 표시: 사진 3/10, 못 올린 게 있으면 그것도
+async function upqPaint() {
+  if (PREVIEW || !('indexedDB' in window)) return;
+  let list = [], st = null;
+  try { list = await upqList(); st = await upqKv('upqStats'); } catch (e) { return; }
+  const wait = list.filter((x) => x.state === 'wait').length, fail = list.filter((x) => x.state === 'fail').length;
+  const pill = $('#upPill');
+  if (pill) {
+    pill.hidden = !wait && !fail;
+    pill.dataset.s = wait ? 'busy' : 'bad';
+    pill.querySelector('span').textContent = wait ? `사진 ${st ? Math.min(st.done, st.total) : 0}/${st ? st.total : wait}` : `사진 ${fail}장 못 올림`;
+  }
+  if (upqView) upqView(list);
+  clearTimeout(upqPollT);
+  if (wait && !document.hidden) upqPollT = setTimeout(upqPaint, 1500);   // 서비스워커가 올리는 것도 보이게
+}
+// 진행 표시를 누르면: 남은 사진, 못 올린 사진, 다시 올리기, 빼기
+function openUpQueue() {
+  const body = h('div', { class:'upq' });
+  const urls = new Map();
+  const src = (it) => { if (!urls.has(it.id)) urls.set(it.id, URL.createObjectURL(it.thumb || it.file)); return urls.get(it.id); };
+  const draw = (list) => {
+    const now = Date.now();
+    const wait = list.filter((x) => x.state === 'wait'), fail = list.filter((x) => x.state === 'fail');
+    const row = (it) => {
+      const busy = it.claimedAt && now - it.claimedAt < UPQ_STALE;
+      const t = ampm(it.time);
+      const sub = it.state === 'fail' ? photoErrText(it.err) : busy ? '올리는 중' : '기다리는 중';
+      return `<li data-id="${esc(it.id)}"><img alt="" src="${src(it)}"><span class="upq-main"><b>${esc(md(it.date))} ${t.ap} ${t.hm}</b><small>${esc(sub)}</small></span>
+        ${it.state === 'fail' ? '<button class="chip" type="button" data-a="retry">다시 올리기</button>' : ''}${busy ? '' : '<button class="chip" type="button" data-a="drop">빼기</button>'}</li>`;
+    };
+    body.innerHTML = (wait.length ? `<h4>올릴 사진 ${wait.length}장</h4><ul class="upq-list">${wait.map(row).join('')}</ul>` : '')
+      + (fail.length ? `<h4>못 올린 사진 ${fail.length}장</h4><ul class="upq-list">${fail.map(row).join('')}</ul>` : '')
+      + (!wait.length && !fail.length ? '<p class="note">올릴 사진이 없어요.</p>' : '')
+      + `<p class="note">${canBgSync() ? '앱을 나가도 계속 올라가요. 인터넷이 끊기면 다시 연결될 때 이어서 올려요.' : '다 올라갈 때까지 앱을 켜 두세요.'}</p>`;
+    foot.hidden = !fail.length;
+  };
+  body.addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-a]');
+    if (!b) return;
+    const id = b.closest('li').dataset.id;
+    if (b.dataset.a === 'retry') { await upqRequeue([id]); startUploads(); }
+    else await upqRemove(id);
+    upqPaint();
+  });
+  const foot = h('footer', { class:'sheet-foot' });
+  const all = h('button', { class:'primary', type:'button' }, '못 올린 사진 모두 다시 올리기');
+  all.addEventListener('click', async () => { const list = await upqList(); await upqRequeue(list.filter((x) => x.state === 'fail').map((x) => x.id)); startUploads(); upqPaint(); });
+  foot.appendChild(all);
+  upqView = draw;
+  openSheet({ title:'사진 올리기', iconName:'photo', color:'photo', body, footer:foot, onClose:() => { upqView = null; setTimeout(() => urls.forEach((u) => URL.revokeObjectURL(u)), 1000); } });
+  upqPaint();
+}
+// 서비스워커가 올린 사진, 끝남, 알림을 눌러 앨범 열기
+function upqMessages() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'upq-done' && d.photo) { upqGotPhoto(normPhoto(d.photo)); upqPaint(); }
+    else if (d.type === 'upq-finish') { upqFinishToast(d.done, d.failed); upqPaint(); }
+    else if (d.type === 'open-album') openAlbum();
+  });
+}
+
 function setupNote() {
   return h('div', { class:'note-box' }, '<b>사진은 시트 연결 코드를 새로 바꾼 뒤에 쓸 수 있어요</b>PC에서 구글 시트의 Apps Script에 새 연결 코드를 붙여 넣고, setupPhotos를 한 번 실행한 다음 새 버전으로 배포해 주세요.');
 }
@@ -3360,11 +3715,14 @@ function pickPhotos(back) {
 
 async function openUpload(files, back) {
   const have = new Set(photos.map((p) => `${p.name}|${p.size}`));
+  if (!PREVIEW) { try { (await upqList()).forEach((x) => have.add(`${x.name}|${x.size}`)); } catch (e) {} }   // 큐에 있는 것도 같은 사진
   const items = [];
   for (const file of files) {
     const it = { file, when:await photoWhen(file), s:'wait', err:'' };
     if (file.size > MAX_PHOTO) it.s = 'big';
     else if (have.has(`${file.name}|${file.size}`)) it.s = 'dup';
+    else have.add(`${file.name}|${file.size}`);   // 한 번에 같은 사진을 두 번 고른 경우
+    if (!PREVIEW && it.s === 'wait') it.copy = file.arrayBuffer().then((b) => new Blob([b], { type:file.type || 'image/jpeg' }), () => null);   // 원본은 고른 즉시 복사(나중에 파일을 못 읽어도 되게)
     items.push(it);
   }
   items.sort((a, b) => `${a.when.date} ${a.when.time}`.localeCompare(`${b.when.date} ${b.when.time}`));
@@ -3397,7 +3755,7 @@ async function openUpload(files, back) {
   const days = Object.keys(byDay).sort().reverse();
   const notes = [];
   const dup = items.filter((it) => it.s === 'dup').length, big = items.filter((it) => it.s === 'big').length;
-  if (dup) notes.push(`이미 올린 사진 ${dup}장은 빼요`);
+  if (dup) notes.push(`이미 올렸거나 올리는 중인 사진 ${dup}장은 빼요`);
   if (big) notes.push(`30MB가 넘는 사진 ${big}장은 못 올려요`);
   const dayText = days.slice(0, 3).map((d) => `${md(d)} ${byDay[d]}장`).join(', ') + (days.length > 3 ? ` 외 ${days.length - 3}일` : '');
   const where = PREVIEW ? '미리보기라서 이 화면에만 잠깐 보여요.' : "원본 그대로 구글 드라이브 '반짝이 사진' 폴더에 저장돼요.";
@@ -3423,6 +3781,24 @@ async function openUpload(files, back) {
     if (running) { stop = true; paintGo(); return; }
     const list = todo();
     if (!list.length) { closeSheet(); cleanup(); return; }
+    if (!PREVIEW) {
+      // 큐에 넣고 창은 바로 닫음. id는 큐에 넣을 때 정하고 끝까지 같은 id로 보냄(응답을 못 받아도 서버가 한 번만 저장)
+      go.disabled = true;
+      const ready = [];
+      for (const it of list) {
+        const blob = await it.copy;
+        if (blob && blob.size) ready.push({ blob, name:it.file.name || 'photo.jpg', size:it.file.size, mime:it.file.type || 'image/jpeg', when:it.when });
+      }
+      const lost = list.length - ready.length;
+      try { if (ready.length) await upqAdd(ready, memoTa.value.trim()); }
+      catch (e) { go.disabled = false; msg.className = 'up-msg bad'; msg.textContent = '폰에 사진을 담아 두지 못했어요. 저장 공간을 확인해 주세요.'; return; }
+      if (mine()) closeSheet(true);
+      cleanup();
+      if (back === 'album') openAlbum();
+      toast(`사진 ${ready.length}장을 올려요. ${canBgSync() ? '앱을 나가도 계속 올라가요.' : '다 올라갈 때까지 앱을 켜 두세요.'}${lost ? ` 읽을 수 없는 사진 ${lost}장은 뺐어요.` : ''}`);
+      startUploads();
+      return;
+    }
     running = true; stop = false; paintGo();
     prog.hidden = false; memoTa.disabled = true;
     const memo = memoTa.value.trim();
@@ -3971,6 +4347,12 @@ function boot() {
   const joined = !PREVIEW && handleJoin();
   if (connected()) swCfg();
   render();
+  if (!PREVIEW) {
+    $('#upPill').addEventListener('click', openUpQueue);
+    upqMessages();
+    if (location.hash === '#album') { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} setTimeout(() => openAlbum(), 0); }   // 사진 알림을 눌러 연 경우
+    if ('indexedDB' in window) upqReleaseOld().catch(() => {}).then(() => { upqPaint(); if (connected()) startUploads(); });   // 남은 사진은 바로 이어서
+  }
 
   let lastDay = todayStr();
   const tick = () => {
@@ -3981,8 +4363,8 @@ function boot() {
   };
   setInterval(() => { if (!document.hidden) tick(); }, 30000);
   setInterval(() => { if (!document.hidden && connected()) sync(); }, 60000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); if (connected()) sync(); } });
-  window.addEventListener('online', () => { if (connected()) sync(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); if (connected()) { sync(); if (!PREVIEW) startUploads(); } } });
+  window.addEventListener('online', () => { if (connected()) { sync(); if (!PREVIEW) startUploads(); } });
   window.addEventListener('offline', () => { if (connected()) { syncError = 'offline'; updatePill(); } });
 
   if (!PREVIEW && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
