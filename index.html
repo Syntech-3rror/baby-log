@@ -284,17 +284,17 @@ svg{display:block}
 .cal-week,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center}
 .cal-week span{padding:4px 0;font-size:12px;color:var(--muted)}
 .cal-week .sun{color:var(--danger)} .cal-week .sat{color:var(--pee)}
-.cal-day{display:flex;flex-direction:column;align-items:center;gap:2px;height:80px;padding:2px 1px 3px;min-width:0;overflow:hidden;text-align:center;border-top:1px solid var(--line)}
+.cal-day{display:flex;flex-direction:column;align-items:center;gap:2px;height:88px;padding:2px 1px 3px;min-width:0;overflow:hidden;text-align:center;border-top:1px solid var(--line)}
 .cal-day .n{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-family:"Nunito",var(--font);font-weight:700;font-size:13px}
 .cal-day.sun .n{color:var(--danger)}
 .cal-day.sat .n{color:var(--pee)}
 .cal-day.today .n{background:var(--lamp);color:var(--lamp-ink)}
 .cal-day.sel .n{box-shadow:0 0 0 2px var(--ink)}
-.cal-day.past .n{opacity:.45}
+.cal-day.gone .n{opacity:.45}
 .cal-day.other .n{opacity:.3}
 .cal-chips{display:flex;flex-direction:column;gap:2px;width:100%;min-width:0}
-.cal-chip{display:block;width:100%;height:14px;padding:0 2px;border-radius:3px;background:var(--cb);color:var(--ci);font-size:10px;line-height:14px;font-weight:400;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:clip}
-.cal-more{display:block;height:14px;font-size:10px;line-height:14px;color:var(--muted);font-family:"Nunito",var(--font);font-weight:700}
+.cal-chip{display:block;width:100%;height:16px;padding:0 2px;border-radius:3px;background:var(--cb);color:var(--ci);font-size:11.5px;letter-spacing:-.3px;line-height:16px;font-weight:400;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.cal-more{display:block;height:16px;font-size:11px;line-height:16px;color:var(--muted);font-family:"Nunito",var(--font);font-weight:700}
 .evday-empty{margin:6px 2px 4px;padding:14px;border-radius:14px;background:var(--surface-2);color:var(--muted);font-size:15px;text-align:center}
 .cal-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 14px;margin:8px 0 2px;font-size:13px;color:var(--muted)}
 .cal-legend span{display:inline-flex;align-items:center;gap:5px}
@@ -348,6 +348,10 @@ svg{display:block}
 .backdrop.open{opacity:1}
 .sheet{position:fixed;left:0;right:0;bottom:0;z-index:21;width:100%;max-width:560px;margin:0 auto;max-height:calc(100vh - 20px);max-height:calc(100dvh - 20px - env(safe-area-inset-top));display:flex;flex-direction:column;background:var(--surface);border-radius:26px 26px 0 0;transform:translateY(105%);transition:transform .26s cubic-bezier(.2,.85,.25,1);padding-bottom:var(--kb)}
 .sheet.open{transform:none}
+.sheet.under{transform:none}
+.backdrop.under{opacity:1}
+.backdrop.stacked{z-index:22}
+.sheet.stacked{z-index:23}
 .sheet-head{position:relative;display:flex;align-items:center;gap:10px;padding:20px 16px 6px 18px;touch-action:none;cursor:grab}
 .sheet-head .grab{position:absolute;left:50%;top:8px;width:40px;height:5px;margin-left:-20px;border-radius:3px;background:var(--line)}
 .sheet.dragging{transition:none}
@@ -1305,12 +1309,19 @@ const useHistory = !PREVIEW && typeof history !== 'undefined' && !!history.pushS
    - 그 밖에 창을 다른 창으로 바꿔 열 때도 지금 항목을 이어 쓴다.
    - popstate 처리 중에는 절대 쌓지 않는다(크롬은 사람이 누르지 않고 쌓은 항목을 뒤로가기에서 건너뛰어 앱이 닫힘). */
 let inPop = false;
-function openSheet({ title, iconName, color, body, footer, onClose, tall, stack, reuse }) {
+// 아래에 깔아 둔 창(그날 일정 창 뒤의 달력, 1.9.0). 누를 수 없고 위 창이 닫히면 다시 살아남
+let underSheet = null;
+function openSheet({ title, iconName, color, body, footer, onClose, tall, stack, reuse, keepBelow }) {
   const inherit = !stack && !!(sheet && sheet.pushed);
+  if (keepBelow && sheet && !underSheet) {   // 지금 창을 닫지 않고 아래에 둠(기록 항목도 그대로)
+    underSheet = sheet; sheet = null;
+    underSheet.box.classList.replace('open', 'under'); underSheet.back.classList.replace('open', 'under');
+    underSheet.box.setAttribute('inert', ''); underSheet.box.setAttribute('aria-hidden', 'true');
+  }
   closeSheet(true, false, true);   // 열린 창은 기록을 그대로 두고 닫음
   $('#toast').classList.remove('show');
-  const back = h('div', { class:'backdrop' });
-  const box = h('section', { class:`sheet${tall ? ' tall' : ''}`, role:'dialog', 'aria-modal':'true', 'aria-label':title });
+  const back = h('div', { class:`backdrop${underSheet ? ' stacked' : ''}` });
+  const box = h('section', { class:`sheet${tall ? ' tall' : ''}${underSheet ? ' stacked' : ''}`, role:'dialog', 'aria-modal':'true', 'aria-label':title });
   const head = h('header', { class:'sheet-head' }, `<span class="grab" aria-hidden="true"></span>${iconName ? `<span class="ico" style="--c:var(--${color || 'ink'})">${icon(iconName)}</span>` : ''}<h2>${esc(title)}</h2>`);
   const x = h('button', { class:'close', type:'button' }, '닫기');
   head.appendChild(x);
@@ -1329,6 +1340,26 @@ function openSheet({ title, iconName, color, body, footer, onClose, tall, stack,
   else if (useHistory && !inPop) { try { history.pushState({ babylogSheet:1 }, ''); sheet.pushed = true; } catch (e) {} }
   return box;
 }
+// 아래에 둔 창을 다시 맨 위 창으로(달력이 그날 창에서 돌아올 때). 기록 항목은 아래 창 것(S1)을 그대로 씀
+function reviveUnder() {
+  const u = underSheet;
+  if (!u) return false;
+  underSheet = null;
+  closeSheet(true, false, true);
+  u.box.removeAttribute('inert'); u.box.removeAttribute('aria-hidden');
+  u.box.classList.replace('under', 'open'); u.back.classList.replace('under', 'open');
+  sheet = u; sheet.pushed = useHistory || sheet.pushed;
+  document.body.style.overflow = 'hidden';
+  if (u.box._repaint) u.box._repaint();
+  return true;
+}
+function dropUnder() {   // 아래 창을 그냥 치움(달력으로 돌아가지 않는 길로 끝날 때)
+  const u = underSheet;
+  if (!u) return;
+  underSheet = null;
+  u.back.classList.remove('under'); u.box.classList.remove('under');
+  setTimeout(() => { u.back.remove(); u.box.remove(); }, 280);
+}
 function closeSheet(silent, fromPop, keepHistory) {
   if (!sheet) return;
   const s = sheet; sheet = null;
@@ -1337,6 +1368,7 @@ function closeSheet(silent, fromPop, keepHistory) {
   document.body.style.overflow = '';
   if (s.pushed && !fromPop && !keepHistory) { try { ignorePop++; history.back(); } catch (e) { ignorePop = Math.max(0, ignorePop - 1); } }
   if (!silent && s.onClose) s.onClose();
+  if (!silent && underSheet && !sheet) dropUnder();   // 돌아갈 곳 없이 닫히면 아래 창도 치움
 }
 window.addEventListener('popstate', () => {
   if (ignorePop > 0) { ignorePop--; return; }
@@ -2684,11 +2716,13 @@ function openDaySheet(d, backCal, reuse) {
   const add = h('button', { class:'primary', type:'button' }, '+ 이날 일정 추가');
   add.addEventListener('click', () => openEventSheet(null, d, backDay));
   foot.appendChild(add);
-  openSheet({ title:evDayLong(d), iconName:'calendar', color:'p-all', body, footer:foot, onClose:backCal, stack:!reuse, reuse:!!reuse });
+  openSheet({ title:evDayLong(d), iconName:'calendar', color:'p-all', body, footer:foot, onClose:backCal, stack:!reuse, reuse:!!reuse, keepBelow:!reuse });
+  if (underSheet && underSheet.box._repaint) underSheet.box._repaint();   // 그날 일정을 고치고 돌아오면 뒤 달력도 새로
 }
 
 /* 일정 화면: 달력(날짜 칸에 사람 색 칩, 1.9.0) + 고른 날부터 60일 목록 */
 function openEvents(selDate, monthKey, reuse) {
+  if (reuse && underSheet && underSheet.box._cal) { reviveUnder(); return; }   // 그날 창 뒤에 있던 달력을 그대로 다시 씀
   let sel = selDate || todayStr();
   let mon = monthKey || sel.slice(0, 7);
   const body = h('div', { class:'evcal' });
@@ -2720,7 +2754,7 @@ function openEvents(selDate, monthKey, reuse) {
       const d = addDays(start, i);
       const day = (byDay.get(d) || []).sort(evCmp);
       const wd = i % 7;
-      const cls = ['cal-day', d.slice(0, 7) !== mon ? 'other' : d < t ? 'past' : '', d === t ? 'today' : '', d === sel ? 'sel' : '', wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''].filter(Boolean).join(' ');
+      const cls = ['cal-day', d.slice(0, 7) !== mon ? 'other' : d < t ? 'gone' : '', d === t ? 'today' : '', d === sel ? 'sel' : '', wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''].filter(Boolean).join(' ');   // 지난 날은 gone(.past는 글자를 다 회색으로 덮어서)
       const label = `${evDayLong(d)}${day.length ? `, 일정 ${day.length}개: ${day.map((e) => e.title).join(', ')}` : ''}`;
       grid += `<button class="${cls}" type="button" data-d="${d}" aria-label="${esc(label)}" aria-pressed="${d === sel}"><span class="n">${parseD(d).getDate()}</span><span class="cal-chips">${chips(day)}</span></button>`;
     }
@@ -2760,7 +2794,8 @@ function openEvents(selDate, monthKey, reuse) {
   const add = h('button', { class:'primary', type:'button' }, '+ 일정 추가');
   add.addEventListener('click', () => openEventSheet(null, sel, back));
   foot.appendChild(add);
-  openSheet({ title:'일정', iconName:'calendar', color:'p-all', body, footer:foot, tall:true, reuse:!!reuse });
+  const calBox = openSheet({ title:'일정', iconName:'calendar', color:'p-all', body, footer:foot, tall:true, reuse:!!reuse });
+  calBox._cal = true; calBox._repaint = paint;   // 그날 창 뒤에 깔렸다가 다시 살아날 때 새로 그림
   paint();
 }
 
