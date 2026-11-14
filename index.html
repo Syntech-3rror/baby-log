@@ -282,6 +282,11 @@ svg{display:block}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;margin:2px -6px 4px}
 .cal-nav h3{margin:0;font-size:18px;font-weight:400}
 .cal-week,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center}
+.cal-swipe{touch-action:pan-y;user-select:none;-webkit-user-select:none}
+.cal-swipe.go-next{animation:calnext .2s ease-out}
+.cal-swipe.go-prev{animation:calprev .2s ease-out}
+@keyframes calnext{from{transform:translateX(36px);opacity:.35}to{transform:none;opacity:1}}
+@keyframes calprev{from{transform:translateX(-36px);opacity:.35}to{transform:none;opacity:1}}
 .cal-week span{padding:4px 0;font-size:12px;color:var(--muted)}
 .cal-week .sun{color:var(--danger)} .cal-week .sat{color:var(--pee)}
 .cal-day{display:flex;flex-direction:column;align-items:center;gap:2px;height:88px;padding:2px 1px 3px;min-width:0;overflow:hidden;text-align:center;border-top:1px solid var(--line)}
@@ -581,7 +586,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -2773,22 +2778,41 @@ function openEvents(selDate, monthKey, reuse) {
     }).join('');
     const note = connected() && eventSupport === 'no' ? '<p class="ev-note">연결 코드를 새 버전으로 바꾸면 일정이 가족과 같이 보여요. 지금은 이 폰에만 있어요.</p>' : '';
     body.innerHTML = `${note}<div class="cal-nav"><button class="arrow" type="button" data-act="prev" aria-label="이전 달">${icon('left')}</button><h3>${y}년 ${m}월</h3><button class="arrow" type="button" data-act="next" aria-label="다음 달">${icon('right')}</button></div>
-      <div class="cal-week">${WEEK.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
-      <div class="cal-grid">${grid}</div>
+      <div class="cal-swipe${slide ? ` go-${slide}` : ''}"><div class="cal-week">${WEEK.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
+      <div class="cal-grid">${grid}</div></div>
       <p class="cal-legend">${EV_WHO.map((w) => `<span>${whoDot(w)}${esc(whoName(w))}</span>`).join('')}</p>
       ${list}`;
   };
+  // 달 넘기기: 버튼과 스와이프가 같이 씀. 넘어갈 때 0.2초 옆으로 밀리는 효과
+  let slide = '';
+  const moveMonth = (dir) => {
+    const [y, m] = mon.split('-').map(Number);
+    mon = dstr(new Date(y, m - 1 + (dir === 'prev' ? -1 : 1), 1)).slice(0, 7);
+    slide = dir; paint(); slide = '';
+  };
+  // 스와이프(1.9.1): 요일 줄과 날짜 칸에서 가로로 50px 넘게, 세로보다 확실히(2배) 밀었을 때만. 세로는 창 스크롤(touch-action: pan-y)
+  let sw = null, swiped = false;   // swiped: 방금 스와이프로 끝남. 바로 뒤 click은 날짜 누름으로 안 침(다음 누름에서 풀림)
+  body.addEventListener('pointerdown', (e) => {
+    swiped = false;
+    if (!e.isPrimary || !e.target.closest('.cal-swipe')) { sw = null; return; }
+    sw = { id:e.pointerId, x:e.clientX, y:e.clientY };
+  });
+  body.addEventListener('pointerup', (e) => {
+    if (!sw || e.pointerId !== sw.id) return;
+    const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+    sw = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 2) { swiped = true; moveMonth(dx < 0 ? 'next' : 'prev'); }
+  });
+  body.addEventListener('pointercancel', () => { sw = null; });   // 세로로 밀어 창이 스크롤되면 브라우저가 취소함
   body.addEventListener('click', (ev) => {
+    if (swiped) { swiped = false; ev.preventDefault(); ev.stopPropagation(); return; }   // 스와이프 끝에 날짜 칸이 눌린 것으로 치지 않음
     const b = ev.target.closest('button');
     if (!b) return;
     if (b.dataset.d) { sel = b.dataset.d; mon = sel.slice(0, 7); paint(); openDaySheet(sel, back); return; }   // 그날 일정 창을 겹쳐 엶(다른 달 날짜면 돌아왔을 때 그 달)
     if (b.dataset.id) { const e = events[b.dataset.id]; if (e) openEventSheet(e, null, back); return; }
     const act = b.dataset.act;
-    if (act === 'prev' || act === 'next') {
-      const [y, m] = mon.split('-').map(Number);
-      mon = dstr(new Date(y, m - 1 + (act === 'prev' ? -1 : 1), 1)).slice(0, 7);
-      paint();
-    } else if (act === 'add') openEventSheet(null, sel, back);
+    if (act === 'prev' || act === 'next') moveMonth(act);
+    else if (act === 'add') openEventSheet(null, sel, back);
   });
   const foot = h('footer', { class:'sheet-foot' });
   const add = h('button', { class:'primary', type:'button' }, '+ 일정 추가');
