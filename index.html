@@ -49,6 +49,7 @@
   --cv-feed:#C2770F;--cv-pee:#2F7FC1;--cv-poo:#A8621A;--cv-food:#D2622F;--cv-grow:#0B8C7F;--cv-red:#E03E3E;--cv-blue:#2D6CDF;
   --font:"Nunito","Cafe24Ssurround",system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
   --p-baby:#E39A2D;--p-dad:#3B6FD4;--p-mom:#D85C8A;--p-all:#2B8C4E;
+  --cb-baby:var(--p-baby);--cb-dad:var(--p-dad);--cb-mom:var(--p-mom);--cb-all:#27854A;--ci-baby:#1D1D1F;--ci-dad:#fff;--ci-mom:#1D1D1F;--ci-all:#fff;
   --kb:0px;
 }
 :root{color-scheme:light}
@@ -61,6 +62,7 @@
     --fever-red:#FF7B72;--fever-blue:#7DB0FF;--food:#FFA27A;--photo:#FF96BD;
     --cv-feed:#C4861A;--cv-pee:#4A95DB;--cv-poo:#C77B33;--cv-food:#D9733D;--cv-grow:#16A091;--cv-red:#E5554F;--cv-blue:#4F8FE8;
     --p-baby:#D99A35;--p-dad:#5C88EE;--p-mom:#DB6A9C;--p-all:#2C9560;
+    --cb-all:var(--p-all);--ci-baby:#131A2C;--ci-dad:#131A2C;--ci-mom:#131A2C;--ci-all:#131A2C;
 }
 *,*::before,*::after{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -282,14 +284,18 @@ svg{display:block}
 .cal-week,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center}
 .cal-week span{padding:4px 0;font-size:12px;color:var(--muted)}
 .cal-week .sun{color:var(--danger)} .cal-week .sat{color:var(--pee)}
-.cal-day{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:50px;padding:3px 0 5px;text-align:center}
-.cal-day .n{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-family:"Nunito",var(--font);font-weight:700;font-size:15px}
+.cal-day{display:flex;flex-direction:column;align-items:center;gap:2px;height:80px;padding:2px 1px 3px;min-width:0;overflow:hidden;text-align:center;border-top:1px solid var(--line)}
+.cal-day .n{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-family:"Nunito",var(--font);font-weight:700;font-size:13px}
+.cal-day.sun .n{color:var(--danger)}
+.cal-day.sat .n{color:var(--pee)}
 .cal-day.today .n{background:var(--lamp);color:var(--lamp-ink)}
 .cal-day.sel .n{box-shadow:0 0 0 2px var(--ink)}
-.cal-day.past{opacity:.45}
-.cal-day.other{opacity:.3}
-.cal-dots{display:flex;gap:3px;height:6px}
-.cal-dots i{width:6px;height:6px;border-radius:50%;background:var(--pc)}
+.cal-day.past .n{opacity:.45}
+.cal-day.other .n{opacity:.3}
+.cal-chips{display:flex;flex-direction:column;gap:2px;width:100%;min-width:0}
+.cal-chip{display:block;width:100%;height:14px;padding:0 2px;border-radius:3px;background:var(--cb);color:var(--ci);font-size:10px;line-height:14px;font-weight:400;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:clip}
+.cal-more{display:block;height:14px;font-size:10px;line-height:14px;color:var(--muted);font-family:"Nunito",var(--font);font-weight:700}
+.evday-empty{margin:6px 2px 4px;padding:14px;border-radius:14px;background:var(--surface-2);color:var(--muted);font-size:15px;text-align:center}
 .cal-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 14px;margin:8px 0 2px;font-size:13px;color:var(--muted)}
 .cal-legend span{display:inline-flex;align-items:center;gap:5px}
 .evg{margin-top:16px}
@@ -2655,17 +2661,44 @@ function renderEvents() {
   sec.innerHTML = html;
 }
 
-/* 일정 화면: 달력 + 고른 날부터 60일 목록 */
+// 일정 목록 한 줄: 시간, 사람, 제목, 메모(달력 아래 목록과 그날 일정 창)
+function evItem(e, now) {
+  const tm = e.time ? `<small>${ampm(e.time).ap}</small><span class="num">${ampm(e.time).hm}</span>` : '<small>하루</small><span class="big">종일</span>';
+  const range = e.end ? `${parseD(e.date).getDate()}일~${parseD(e.end).getDate()}일` : '';
+  const sub = [whoName(e.who), evYr(e), range, e.memo].filter(Boolean).join(', ');
+  return `<li><button class="evi${evPast(e, now) ? ' past' : ''}" type="button" data-id="${esc(e.id)}"><time>${tm}</time>${whoDot(e.who)}<span class="ev-main"><span class="ev-title">${esc(e.title)}</span><span class="ev-sub"><span>${esc(sub)}</span></span></span></button></li>`;
+}
+
+/* 그날 일정 창(1.9.0): 달력에서 날짜를 누르면 달력 위로 겹쳐 엶(달력 S1, 이 창 S2, 여기서 연 일정 창 S3).
+   돌아올 때는 1.5.1 규칙대로 아래 항목을 이어 씀(reuse) */
+function openDaySheet(d, backCal, reuse) {
+  const backDay = () => openDaySheet(d, backCal, true);
+  const body = h('div', { class:'evday' });
+  const list = evRange(d, d).sort(evCmp);
+  body.innerHTML = list.length ? `<ul class="evl">${list.map((e) => evItem(e, new Date())).join('')}</ul>` : '<p class="evday-empty">이날은 일정이 없어요</p>';
+  body.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-id]');
+    if (b) { const e = events[b.dataset.id]; if (e) openEventSheet(e, null, backDay); }
+  });
+  const foot = h('footer', { class:'sheet-foot' });
+  const add = h('button', { class:'primary', type:'button' }, '+ 이날 일정 추가');
+  add.addEventListener('click', () => openEventSheet(null, d, backDay));
+  foot.appendChild(add);
+  openSheet({ title:evDayLong(d), iconName:'calendar', color:'p-all', body, footer:foot, onClose:backCal, stack:!reuse, reuse:!!reuse });
+}
+
+/* 일정 화면: 달력(날짜 칸에 사람 색 칩, 1.9.0) + 고른 날부터 60일 목록 */
 function openEvents(selDate, monthKey, reuse) {
   let sel = selDate || todayStr();
   let mon = monthKey || sel.slice(0, 7);
   const body = h('div', { class:'evcal' });
   const back = () => openEvents(sel, mon, true);   // 일정 창에서 돌아올 때는 달력 항목(S1)을 이어 씀
-  const item = (e, now) => {
-    const tm = e.time ? `<small>${ampm(e.time).ap}</small><span class="num">${ampm(e.time).hm}</span>` : '<small>하루</small><span class="big">종일</span>';
-    const range = e.end ? `${parseD(e.date).getDate()}일~${parseD(e.end).getDate()}일` : '';
-    const sub = [whoName(e.who), evYr(e), range, e.memo].filter(Boolean).join(', ');
-    return `<li><button class="evi${evPast(e, now) ? ' past' : ''}" type="button" data-id="${esc(e.id)}"><time>${tm}</time>${whoDot(e.who)}<span class="ev-main"><span class="ev-title">${esc(e.title)}</span><span class="ev-sub"><span>${esc(sub)}</span></span></span></button></li>`;
+  const item = evItem;
+  // 날짜 칸 칩: 하루 3개까지, 넘으면 2개 + '+N'. 글자는 제목만 한 줄(넘치면 자름)
+  const chips = (list) => {
+    const show = list.length > 3 ? list.slice(0, 2) : list;
+    return show.map((e) => { const k = (EV_COLOR[e.who] || 'p-all').slice(2); return `<b class="cal-chip" style="--cb:var(--cb-${k});--ci:var(--ci-${k})">${esc(e.title)}</b>`; }).join('')
+      + (list.length > 3 ? `<b class="cal-more">+${list.length - 2}</b>` : '');
   };
   const paint = () => {
     const t = todayStr(), now = new Date();
@@ -2685,9 +2718,11 @@ function openEvents(selDate, monthKey, reuse) {
     let grid = '';
     for (let i = 0; i < weeks * 7; i++) {
       const d = addDays(start, i);
-      const dots = (byDay.get(d) || []).sort(evCmp).slice(0, 3).map((e) => `<i style="--pc:var(--${EV_COLOR[e.who]})"></i>`).join('');
-      const cls = ['cal-day', d.slice(0, 7) !== mon ? 'other' : d < t ? 'past' : '', d === t ? 'today' : '', d === sel ? 'sel' : ''].filter(Boolean).join(' ');
-      grid += `<button class="${cls}" type="button" data-d="${d}" aria-label="${esc(evDayLong(d))}" aria-pressed="${d === sel}"><span class="n">${parseD(d).getDate()}</span><span class="cal-dots">${dots}</span></button>`;
+      const day = (byDay.get(d) || []).sort(evCmp);
+      const wd = i % 7;
+      const cls = ['cal-day', d.slice(0, 7) !== mon ? 'other' : d < t ? 'past' : '', d === t ? 'today' : '', d === sel ? 'sel' : '', wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''].filter(Boolean).join(' ');
+      const label = `${evDayLong(d)}${day.length ? `, 일정 ${day.length}개: ${day.map((e) => e.title).join(', ')}` : ''}`;
+      grid += `<button class="${cls}" type="button" data-d="${d}" aria-label="${esc(label)}" aria-pressed="${d === sel}"><span class="n">${parseD(d).getDate()}</span><span class="cal-chips">${chips(day)}</span></button>`;
     }
     const groups = new Map([[sel, []]]);
     const endD = addDays(sel, 59);
@@ -2712,7 +2747,7 @@ function openEvents(selDate, monthKey, reuse) {
   body.addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
     if (!b) return;
-    if (b.dataset.d) { sel = b.dataset.d; mon = sel.slice(0, 7); paint(); return; }   // 다른 달 날짜를 누르면 그 달로
+    if (b.dataset.d) { sel = b.dataset.d; mon = sel.slice(0, 7); paint(); openDaySheet(sel, back); return; }   // 그날 일정 창을 겹쳐 엶(다른 달 날짜면 돌아왔을 때 그 달)
     if (b.dataset.id) { const e = events[b.dataset.id]; if (e) openEventSheet(e, null, back); return; }
     const act = b.dataset.act;
     if (act === 'prev' || act === 'next') {
@@ -3390,7 +3425,7 @@ function upqPatch(id, patch, onlyOwner) {
     };
   });
 }
-// 진행 수 더하기(done, fail). 큐가 비었다가 새로 들어오면 upqAdd가 새로 셈
+// 진행 수 더하기(done, fail). 큐가 비었다가 새로 들어오면 upqCommit(화면)이 새로 셈
 function upqCount(field, n) {
   return upqTx('kv', 'readwrite', (tx) => {
     const st = tx.objectStore('kv');
@@ -3527,22 +3562,42 @@ async function upqSmallPage(blob) {
     return view && thumb ? { view, thumb, w:d.w, h:d.h } : null;
   } finally { d.done(); }
 }
-// 큐에 넣기. 큐에 기다리는 게 없었으면 진행 수를 새로 셈
-function upqAdd(list, memo) {
+// 고른 사진 한 장을 큐에 담아 둠(state 'draft'). 올리기를 누르기 전이라 올리는 쪽은 안 맡음
+function upqStage(blob, it, seq) {
+  const id = `p${newId()}`;
+  return upqTx('upq', 'readwrite', (tx, set) => {
+    tx.objectStore('upq').put({ id, seq, addedAt:Date.now(), state:'draft', tries:0, err:'', claimedAt:0, claimedBy:'', nextAt:0,
+      file:blob, name:it.file.name || 'photo.jpg', size:it.file.size, mime:it.file.type || 'image/jpeg', date:it.when.date, time:it.when.time, memo:'', createdAt:'', w:0, h:0 });
+    set(id);
+  });
+}
+// 올리기: 담아 둔 사진을 '기다림'으로. 큐에 기다리는 게 없었으면 진행 수를 새로 셈
+function upqCommit(ids, memo) {
   const now = Date.now(), at = new Date().toISOString();
   return upqTx(['upq', 'kv'], 'readwrite', (tx) => {
     const st = tx.objectStore('upq'), kv = tx.objectStore('kv');
     const r = st.getAll();
     r.onsuccess = () => {
-      const waiting = (r.result || []).some((x) => x.state === 'wait');
-      list.forEach((x, i) => st.put({ id:`p${newId()}`, seq:i, addedAt:now, state:'wait', tries:0, err:'', claimedAt:0, claimedBy:'', nextAt:0,
-        file:x.blob, name:x.name, size:x.size, mime:x.mime, date:x.when.date, time:x.when.time, memo, createdAt:at, w:0, h:0 }));
+      const all = r.result || [];
+      const waiting = all.some((x) => x.state === 'wait');
+      const mine = all.filter((x) => x.state === 'draft' && ids.includes(x.id));
+      mine.forEach((x) => st.put(Object.assign(x, { state:'wait', memo, addedAt:now, createdAt:at })));
       const g = kv.get('upqStats');
       g.onsuccess = () => {
         const o = g.result;
-        kv.put(waiting && o ? Object.assign(o, { total:o.total + list.length, notified:false }) : { total:list.length, done:0, fail:o ? o.fail || 0 : 0, notified:false }, 'upqStats');
+        kv.put(waiting && o ? Object.assign(o, { total:o.total + mine.length, notified:false }) : { total:mine.length, done:0, fail:o ? o.fail || 0 : 0, notified:false }, 'upqStats');
       };
     };
+  });
+}
+// 창을 그냥 닫으면 담아 둔 사진을 지움
+function upqDiscard(ids) {
+  return upqTx('upq', 'readwrite', (tx) => {
+    const st = tx.objectStore('upq');
+    ids.forEach((id) => {
+      const r = st.get(id);
+      r.onsuccess = () => { if (r.result && r.result.state === 'draft') st.delete(id); };
+    });
   });
 }
 // 못 올린 사진 다시 올리기, 빼기
@@ -3582,7 +3637,10 @@ function upqReleaseOld() {
   return upqTx('upq', 'readwrite', (tx) => {
     const st = tx.objectStore('upq');
     const r = st.getAll();
-    r.onsuccess = () => (r.result || []).forEach((x) => { if (x.claimedBy && x.claimedBy.startsWith('page-') && x.claimedBy !== upqOwner) st.put(Object.assign(x, { claimedAt:0, claimedBy:'' })); });
+    r.onsuccess = () => (r.result || []).forEach((x) => {
+      if (x.state === 'draft') st.delete(x.id);
+      else if (x.claimedBy && x.claimedBy.startsWith('page-') && x.claimedBy !== upqOwner) st.put(Object.assign(x, { claimedAt:0, claimedBy:'' }));
+    });
   });
 }
 async function upqDonePage(data, it) {
@@ -3715,14 +3773,13 @@ function pickPhotos(back) {
 
 async function openUpload(files, back) {
   const have = new Set(photos.map((p) => `${p.name}|${p.size}`));
-  if (!PREVIEW) { try { (await upqList()).forEach((x) => have.add(`${x.name}|${x.size}`)); } catch (e) {} }   // 큐에 있는 것도 같은 사진
+  if (!PREVIEW) { try { (await upqList()).forEach((x) => { if (x.state !== 'draft') have.add(`${x.name}|${x.size}`); }); } catch (e) {} }   // 큐에 있는 것도 같은 사진
   const items = [];
   for (const file of files) {
     const it = { file, when:await photoWhen(file), s:'wait', err:'' };
     if (file.size > MAX_PHOTO) it.s = 'big';
     else if (have.has(`${file.name}|${file.size}`)) it.s = 'dup';
     else have.add(`${file.name}|${file.size}`);   // 한 번에 같은 사진을 두 번 고른 경우
-    if (!PREVIEW && it.s === 'wait') it.copy = file.arrayBuffer().then((b) => new Blob([b], { type:file.type || 'image/jpeg' }), () => null);   // 원본은 고른 즉시 복사(나중에 파일을 못 읽어도 되게)
     items.push(it);
   }
   items.sort((a, b) => `${a.when.date} ${a.when.time}`.localeCompare(`${b.when.date} ${b.when.time}`));
@@ -3773,7 +3830,24 @@ async function openUpload(files, back) {
     go.textContent = n ? (failed ? `못 올린 ${n}장 다시 올리기` : `${n}장 올리기`) : '닫기';
     go.disabled = false;
   };
-  const box = openSheet({ title:'사진 올리기', iconName:'photo', color:'photo', body, footer:foot, onClose:() => { stop = true; } });
+  // 원본은 고르는 즉시 한 장씩 차례로 읽어 큐에 담아 둠(나중에 파일을 못 읽어도 되게, 메모리는 한 번에 한 장분만)
+  let staged = false, dropped = false;
+  const stage = PREVIEW ? Promise.resolve() : (async () => {
+    let seq = 0;
+    for (const it of items) {
+      if (dropped) break;
+      if (it.s !== 'wait') continue;
+      try {
+        const blob = new Blob([await it.file.arrayBuffer()], { type:it.file.type || 'image/jpeg' });
+        if (dropped) break;
+        it.qid = await upqStage(blob, it, seq++);
+      } catch (e) { it.qid = null; }
+    }
+  })();
+  const box = openSheet({ title:'사진 올리기', iconName:'photo', color:'photo', body, footer:foot, onClose:() => {
+    stop = true;
+    if (!PREVIEW && !staged) { dropped = true; stage.then(() => upqDiscard(items.map((it) => it.qid).filter(Boolean))).catch(() => {}); }
+  } });
   const mine = () => sheet && sheet.box === box;
   const cleanup = () => setTimeout(() => urls.forEach((u) => URL.revokeObjectURL(u)), 1000);
   paintGo();
@@ -3784,14 +3858,14 @@ async function openUpload(files, back) {
     if (!PREVIEW) {
       // 큐에 넣고 창은 바로 닫음. id는 큐에 넣을 때 정하고 끝까지 같은 id로 보냄(응답을 못 받아도 서버가 한 번만 저장)
       go.disabled = true;
-      const ready = [];
-      for (const it of list) {
-        const blob = await it.copy;
-        if (blob && blob.size) ready.push({ blob, name:it.file.name || 'photo.jpg', size:it.file.size, mime:it.file.type || 'image/jpeg', when:it.when });
-      }
-      const lost = list.length - ready.length;
-      try { if (ready.length) await upqAdd(ready, memoTa.value.trim()); }
+      msg.className = 'up-msg'; msg.textContent = '사진을 폰에 담는 중이에요';
+      await stage;
+      const ids = list.map((it) => it.qid).filter(Boolean);
+      const lost = list.length - ids.length;
+      try { if (ids.length) await upqCommit(ids, memoTa.value.trim()); }
       catch (e) { go.disabled = false; msg.className = 'up-msg bad'; msg.textContent = '폰에 사진을 담아 두지 못했어요. 저장 공간을 확인해 주세요.'; return; }
+      staged = true;
+      const ready = ids;
       if (mine()) closeSheet(true);
       cleanup();
       if (back === 'album') openAlbum();

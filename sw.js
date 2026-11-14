@@ -145,7 +145,7 @@ function upqPatch(id, patch, onlyOwner) {
     };
   });
 }
-// 진행 수 더하기(done, fail). 큐가 비었다가 새로 들어오면 upqAdd가 새로 셈
+// 진행 수 더하기(done, fail). 큐가 비었다가 새로 들어오면 upqCommit(화면)이 새로 셈
 function upqCount(field, n) {
   return upqTx('kv', 'readwrite', (tx) => {
     const st = tx.objectStore('kv');
