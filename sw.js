@@ -1,5 +1,5 @@
 // 반짝이: 인터넷이 끊겨도 앱 화면이 열리도록 기본 파일을 저장해 둡니다.
-const CACHE = 'babylog-v1.13.0';
+const CACHE = 'babylog-v1.13.1';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './badge-96.png'];
 
 self.addEventListener('install', (event) => {
@@ -72,36 +72,56 @@ function feedText(d) {
   if (!f) return FEED_PLAIN;
   return `마지막 수유 후 ${hoursText(d.hours)} 지났어요 (${when})`;
 }
-// 일정 한 줄: '11월 20일 (목) 오전 10:00 소아과, 아빠', 하루 종일, 여러 날('11월 20일 (목) ~ 22일 (토)'), 매년이면 끝에 ' (매년)'
-function evDay(s, withMonth) {
+// 일정 한 줄(1.13.1, 사용자가 정한 짧은 모양): '[아빠 일정 추가] 11/20(금) 10:00 소아과'.
+// 사람: 아기는 이 폰의 아기 이름(없으면 '아기'), 같이는 '가족'. 날짜 두 자리 월/일과 요일, 여러 날은 '11/20(금)~11/22(일)'.
+// 시간은 24시간 두 자리, 하루 종일이면 뺌. 매년 표시와 메모는 안 넣음. 수정은 바뀌기 전 값 뒤에 ' → '와 바뀐 칸의 새 값
+const p2 = (n) => String(n).padStart(2, '0');
+function evDay(s) {
   const [y, m, d] = String(s).split('-').map(Number);
-  const w = WEEK_SW[new Date(y, m - 1, d).getDay()];
-  return `${withMonth ? `${m}월 ` : ''}${d}일 (${w})`;
+  return `${p2(m)}/${p2(d)}(${WEEK_SW[new Date(y, m - 1, d).getDay()]})`;
 }
+const evDays = (e) => `${evDay(e.date)}${e.end ? `~${evDay(e.end)}` : ''}`;
+const evHm = (t) => { const [hh, mm] = String(t).split(':').map(Number); return `${p2(hh)}:${p2(mm)}`; };
+const evWho = (w, babyName) => (w === '아기' ? (babyName || '아기') : w === '같이' ? '가족' : (w || '가족'));
+const EV_KIND = { add:'추가', edit:'수정', del:'삭제' };
 function evLine(e, babyName) {
-  let when = evDay(e.date, true);
-  if (e.end) when += ` ~ ${evDay(e.end, String(e.end).slice(0, 7) !== String(e.date).slice(0, 7))}`;
-  when += e.time ? ` ${ampmText(e.time)}` : e.end ? '' : ' 하루 종일';
-  const who = e.who === '아기' ? (babyName || '아기') : (e.who || '');
-  return `${when} ${e.title}${who ? `, ${who}` : ''}${e.repeat === '매년' ? ' (매년)' : ''}`;
+  const prev = e.kind === 'edit' && e.prev && typeof e.prev === 'object' ? e.prev : null;
+  const has = (k) => !!prev && Object.prototype.hasOwnProperty.call(prev, k);
+  const old = Object.assign({}, e);
+  ['date', 'end', 'time', 'title', 'who'].forEach((k) => { if (has(k)) old[k] = String(prev[k] || ''); });
+  const parts = [];
+  if (has('date') || has('end')) parts.push(evDays(e));
+  if (has('time')) parts.push(e.time ? evHm(e.time) : '종일');
+  if (has('title')) parts.push(e.title);
+  const whoChanged = has('who') && old.who !== e.who;
+  let line = `[${evWho(e.who, babyName)} 일정 ${EV_KIND[e.kind] || '수정'}] ${evDays(old)}${old.time ? ` ${evHm(old.time)}` : ''} ${old.title}`;
+  if (parts.length) line += ` → ${parts.join(' ')}`;
+  if (whoChanged) line += ` (${evWho(old.who, babyName)} → ${evWho(e.who, babyName)})`;
+  return line;
 }
+// 여러 건이면 한 건씩 줄을 바꿔 최근 것부터 3줄, 넘치면 '외 N개'
 function eventText(list, babyName) {
-  const last = list[list.length - 1];
-  if (list.length > 1) return `일정 ${list.length}개가 바뀌었어요. 마지막은 ${evLine(last, babyName)}`;
-  const head = last.kind === 'add' ? '새 일정이에요' : last.kind === 'del' ? '일정을 지웠어요' : '일정이 바뀌었어요';
-  return `${head}: ${evLine(last, babyName)}`;
+  const lines = list.slice().reverse().map((e) => evLine(e, babyName));
+  return (lines.length > 3 ? lines.slice(0, 3).concat(`외 ${lines.length - 3}개`) : lines).join('\n');
 }
 
-// pushInfo를 5초 안에 물음. 못 받으면 null
+// pushInfo를 20초 안에 물음(1.13.1, 5초에서 늘림. 폰이 잠들었다 깨면 느림). 연결이 안 되거나 JSON이 아니면 2초 쉬고 한 번 더. 못 받으면 null
+const INFO_WAIT = 20000, INFO_RETRY = 2000;
 async function askInfo(c) {
   if (!c || !c.apiUrl || !c.code) return null;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);   // 5초 안에 못 받으면 일반 문구
+  let over = false;
+  const timer = setTimeout(() => { over = true; ctrl.abort(); }, INFO_WAIT);   // 둘을 합쳐 20초
   try {
-    const res = await fetch(c.apiUrl, { method:'POST', body:JSON.stringify({ action:'pushInfo', code:c.code, device:c.device || '' }), signal:ctrl.signal, redirect:'follow' });
-    const d = await res.json();
-    return d && d.ok ? d : null;
-  } catch (e) {
+    for (let i = 0; i < 2 && !over; i++) {
+      if (i) { await new Promise((r) => { const w = setTimeout(r, INFO_RETRY); ctrl.signal.addEventListener('abort', () => { clearTimeout(w); r(); }); }); if (over) break; }
+      let d;
+      try {
+        const res = await fetch(c.apiUrl, { method:'POST', body:JSON.stringify({ action:'pushInfo', code:c.code, device:c.device || '' }), signal:ctrl.signal, redirect:'follow' });
+        d = await res.json();
+      } catch (e) { continue; }   // 연결 실패나 JSON 아님: 한 번 더
+      return d && d.ok ? d : null;
+    }
     return null;
   } finally { clearTimeout(timer); }
 }
