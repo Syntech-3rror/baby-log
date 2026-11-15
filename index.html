@@ -372,6 +372,7 @@ svg{display:block}
 .madd{margin-top:10px}
 .chip.mknown .x{color:var(--muted)}
 span.chip{display:inline-flex;align-items:center}
+.item.static{cursor:default}
 .madd .chips{margin-bottom:8px}
 .ev-note{margin:0 0 10px;padding:10px 12px;border-radius:14px;background:var(--lamp-soft);font-size:14px;line-height:1.45}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;margin:2px -6px 4px}
@@ -3251,7 +3252,7 @@ const FRUITS = ['사과', '배', '바나나', '복숭아', '자두', '수박', '
 const foodGroup = (f) => (GRAINS.includes(f) ? 'grain' : PROTEINS.includes(f) ? 'protein' : FRUITS.includes(f) ? 'fruit' : 'veg');
 const RICE_CHIPS = ['미음', '쌀미음', '죽', '쌀죽', '무른밥', '진밥', '밥'];
 const FOOD_ALIAS = { '쇠고기':'소고기', '계란':'달걀', '노른자':'달걀', '닭':'닭고기', '닭안심':'닭고기', '닭가슴살':'닭고기' };
-const RICE_WORDS = ['무른밥', '진밥', '쌀미음', '쌀죽', '미음', '죽', '밥'];   // 칩 끝의 미음, 죽, 밥은 재료로 안 셈(곡류가 없으면 쌀)
+const RICE_WORDS = ['무른밥', '진밥', '미음', '죽', '밥'];   // 칩 끝의 미음, 죽, 밥은 재료로 안 셈(곡류가 없으면 쌀). '쌀미음', '쌀죽'은 넣지 않음(찹쌀의 쌀을 가려서). 똑같은 칩은 RICE_CHIPS
 // 알레르기 주의 재료(식약처 예시 식품과 그 가공품). 이름이 '밀'이거나 이 낱말이 들어 있으면. '오트밀'은 아님, 소고기는 넣지 않음
 const ALLERGY_WORDS = ['달걀', '계란', '메추리알', '우유', '치즈', '요거트', '요구르트', '밀가루', '통밀', '국수', '빵', '대두', '콩', '두부', '두유',
   '땅콩', '호두', '잣', '견과', '메밀', '생선', '고등어', '연어', '대구', '새우', '게', '조개', '굴', '오징어', '복숭아', '귤', '오렌지', '토마토', '닭', '돼지'];
@@ -3824,11 +3825,15 @@ function openMealDay(d, backCal, reuse) {
     if (a && (p || d === t)) { lines.push(a.text); if (a.note) lines.push(a.note); }
     lines.push(`농도 ${STAGE_THICK[(p || { stage:mealStage(d).stage }).stage]}`);
     if (a && a.noBirth) lines.push('설정에 생일을 넣으면 단계와 횟수가 맞게 나와요');
-    lines.push(eatenText(eatenOn(d)));
+    const dayRec = eng.byDate.get(d);   // 지난 날은 엔진의 그날 기록(이 폰에 없으면 foodLog)
+    if (d < t) { if (dayRec) lines.push(`먹은 것: ${ateText(dayRec)}`); }
+    else lines.push(eatenText(eatenOn(d)));
     const wl = weightLine(); if (wl) lines.push(wl);
     html += `<ul class="lines md-lines">${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul><p class="md-small">${MEAL_CHECK}</p>`;
+    // 기록 목록: 이 폰에 있는 기록만 눌러서 고침. 없으면 foodLog 줄을 누를 수 없는 줄로
     const recs = eatenOn(d).list;
     if (recs.length) html += `<ul class="tl md-recs">${recs.map((r) => `<li><button class="item" type="button" data-rid="${esc(r.id)}" style="--c:var(--food)"><time><small>${ampm(r.time).ap}</small><span class="num">${ampm(r.time).hm}</span></time><span class="ico">${icon('bowl')}</span><span><span class="what">${describe(r).html}</span></span><span></span></button></li>`).join('')}</ul>`;
+    else if (dayRec) html += `<ul class="tl md-recs">${dayRec.recs.map((r) => `<li><div class="item static" style="--c:var(--food)"><time><small>${ampm(r.time).ap}</small><span class="num">${ampm(r.time).hm}</span></time><span class="ico">${icon('bowl')}</span><span><span class="what">${esc(r.name || '이유식')}${r.g ? ` <span class="num">${esc(fmt(r.g, 0))}</span>g` : ''}</span></span><span></span></div></li>`).join('')}</ul>`;
     const acts = [];
     if (d >= t) acts.push(`<button class="chip" type="button" data-act="rest" aria-pressed="${restOn(d)}">이날 새 재료 쉬기</button>`);
     const ate = d <= t && ps && ps.newFoods.length ? ps.newFoods[0].f : '';
@@ -5469,7 +5474,7 @@ function boot() {
     if (act === 'cal') openEvents(todayStr(), null, false, 'meal');
     else if (act === 'day') openMealDay(todayStr());
     else if (act === 'edit') openMealEdit();
-    else if (act === 'react') { setReact(mealEngine(), b.dataset.f, true); toast(`${b.dataset.f} 반응 있었어요로 적었어요`); }
+    else if (act === 'react') { setReact(mealEngine(), b.dataset.f, true); toast(`${b.dataset.f}에 반응이 있었다고 적었어요`); }
     else if (act === 'notreact') { store.set('mealNotReact', [`${b.dataset.rid}|${b.dataset.f}`].concat(store.get('mealNotReact', [])).slice(0, 50)); render(); }   // 이 폰에만
   });
   $('#pics').addEventListener('click', (e) => {
