@@ -1,5 +1,5 @@
 // 반짝이: 인터넷이 끊겨도 앱 화면이 열리도록 기본 파일을 저장해 둡니다.
-const CACHE = 'babylog-v1.10.0';
+const CACHE = 'babylog-v1.11.0';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png', './badge-96.png'];
 
 self.addEventListener('install', (event) => {
@@ -45,11 +45,14 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-/* ---------- 막수 알림(1.8.0) ---------- */
-// 연결 코드가 내용 없는 푸시를 보내면, 여기서 마지막 수유를 짧게 물어 문구를 만들어 띄움
+/* ---------- 막수 알림(1.8.0), 일정 바뀜 알림(1.11.0) ---------- */
+// 연결 코드가 내용 없는 푸시를 보내면, 여기서 pushInfo를 짧게 물어 문구를 만들어 띄움.
+// 새 연결 코드(1.11.0)는 events(일정 바뀜 항목)와 feedDue(막수 차례인지), quiet(밤 시간인지)를 같이 줌
 const FEED_TAG = 'babylog-feed';   // 같은 tag라 이전 알림을 덮어씀
+const EVENT_TAG = 'babylog-event';
+const WEEK_SW = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 연결 주소와 가족 코드(화면이 IndexedDB 'kv' > 'cfg'에 둠)
+// 연결 주소와 가족 코드(화면이 IndexedDB 'kv' > 'cfg'에 둠). ev: 이 폰이 일정 바뀜을 켰는지, name: 아기 이름
 function swCfg() {
   return upqKv('cfg').then((c) => c || null, () => null);
 }
@@ -59,43 +62,97 @@ function ampmText(t) {
   const [hh, mm] = String(t).split(':').map(Number);
   return `${hh < 12 ? '오전' : '오후'} ${hh % 12 === 0 ? 12 : hh % 12}:${String(mm).padStart(2, '0')}`;
 }
+const FEED_PLAIN = '마지막 수유 후 정한 시간이 지났어요. 앱에서 확인해 주세요.';
+// 막수 문구(시험 알림 포함). d가 없으면 일반 문구
+function feedText(d) {
+  if (!d) return FEED_PLAIN;
+  const f = d.feed;
+  const when = f ? `${ampmText(f.time)}${f.amount !== '' && f.amount != null ? `, ${f.amount}${f.unit || ''}` : ''}` : '';
+  if (d.test) return f ? `시험 알림이에요. 마지막 수유는 ${when}예요.` : '시험 알림이에요. 알림이 잘 와요.';
+  if (!f) return FEED_PLAIN;
+  return `마지막 수유 후 ${hoursText(d.hours)} 지났어요 (${when})`;
+}
+// 일정 한 줄: '11월 20일 (목) 오전 10:00 소아과, 아빠', 하루 종일, 여러 날('11월 20일 (목) ~ 22일 (토)'), 매년이면 끝에 ' (매년)'
+function evDay(s, withMonth) {
+  const [y, m, d] = String(s).split('-').map(Number);
+  const w = WEEK_SW[new Date(y, m - 1, d).getDay()];
+  return `${withMonth ? `${m}월 ` : ''}${d}일 (${w})`;
+}
+function evLine(e, babyName) {
+  let when = evDay(e.date, true);
+  if (e.end) when += ` ~ ${evDay(e.end, String(e.end).slice(0, 7) !== String(e.date).slice(0, 7))}`;
+  when += e.time ? ` ${ampmText(e.time)}` : e.end ? '' : ' 하루 종일';
+  const who = e.who === '아기' ? (babyName || '아기') : (e.who || '');
+  return `${when} ${e.title}${who ? `, ${who}` : ''}${e.repeat === '매년' ? ' (매년)' : ''}`;
+}
+function eventText(list, babyName) {
+  const last = list[list.length - 1];
+  if (list.length > 1) return `일정 ${list.length}개가 바뀌었어요. 마지막은 ${evLine(last, babyName)}`;
+  const head = last.kind === 'add' ? '새 일정이에요' : last.kind === 'del' ? '일정을 지웠어요' : '일정이 바뀌었어요';
+  return `${head}: ${evLine(last, babyName)}`;
+}
 
-async function feedMessage() {
-  const plain = '마지막 수유 후 정한 시간이 지났어요. 앱에서 확인해 주세요.';
-  const c = await swCfg();
-  if (!c || !c.apiUrl || !c.code) return plain;
+// pushInfo를 5초 안에 물음. 못 받으면 null
+async function askInfo(c) {
+  if (!c || !c.apiUrl || !c.code) return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);   // 5초 안에 못 받으면 일반 문구
   try {
     const res = await fetch(c.apiUrl, { method:'POST', body:JSON.stringify({ action:'pushInfo', code:c.code, device:c.device || '' }), signal:ctrl.signal, redirect:'follow' });
     const d = await res.json();
-    if (!d || !d.ok) return plain;
-    const f = d.feed;
-    const when = f ? `${ampmText(f.time)}${f.amount !== '' && f.amount != null ? `, ${f.amount}${f.unit || ''}` : ''}` : '';
-    if (d.test) return f ? `시험 알림이에요. 마지막 수유는 ${when}예요.` : '시험 알림이에요. 알림이 잘 와요.';
-    if (!f) return plain;
-    return `마지막 수유 후 ${hoursText(d.hours)} 지났어요 (${when})`;
+    return d && d.ok ? d : null;
   } catch (e) {
-    return plain;
+    return null;
   } finally { clearTimeout(timer); }
 }
 
+const show = (body, opt) => self.registration.showNotification('반짝이', Object.assign({
+  body, tag:FEED_TAG, renotify:true, icon:'icon-192.png', badge:'badge-96.png',   // badge: 안드로이드 상단바 작은 아이콘(투명 배경에 흰 반짝이)
+  data:{ url:self.registration.scope },
+}, opt || {}));
+
+async function onPush() {
+  const c = await swCfg();
+  const d = await askInfo(c);
+  if (!d) {   // 못 받음: 이 폰이 일정 알림을 켰으면 어느 알림인지 모르니 두루 쓰는 문구
+    return show(c && c.ev ? '반짝이에 새 소식이 있어요. 앱에서 확인해 주세요.' : FEED_PLAIN);
+  }
+  if (d.feedDue === undefined) return show(feedText(d));   // 예전 연결 코드: 지금처럼 막수 문구
+  const jobs = [];
+  const events = Array.isArray(d.events) ? d.events.filter((e) => e && e.date) : [];
+  if (events.length) {
+    const last = events[events.length - 1];
+    jobs.push(show(eventText(events, c && c.name), { tag:EVENT_TAG, silent:!!d.quiet, data:{ url:self.registration.scope, events:true, date:last.date } }));
+  }
+  if (d.test || d.feedDue) jobs.push(show(feedText(d)));
+  if (jobs.length) return Promise.all(jobs);
+  // 보여 줄 게 없음(앞 푸시에서 같이 보여 줌): 떠 있는 반짝이 알림 중 가장 최근 것을 같은 tag로 조용히 다시
+  let open = [];
+  try { open = await self.registration.getNotifications(); } catch (e) { open = []; }
+  const latest = open.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
+  if (latest) return show(latest.body, { tag:latest.tag || FEED_TAG, data:latest.data || { url:self.registration.scope }, silent:true, renotify:false });
+  return show('앱에서 확인해 주세요', { silent:true, renotify:false });
+}
+
 self.addEventListener('push', (event) => {
-  event.waitUntil(feedMessage().then((body) => self.registration.showNotification('반짝이', {
-    body, tag:FEED_TAG, renotify:true, icon:'icon-192.png', badge:'badge-96.png',   // badge: 안드로이드 상단바 작은 아이콘(투명 배경에 흰 반짝이)
-    data:{ url:self.registration.scope },
-  })));
+  event.waitUntil(onPush());
 });
 
-// 알림을 누르면 앱을 열고, 이미 열려 있으면 그 창으로
+// 알림을 누르면 앱을 열고, 이미 열려 있으면 그 창으로. 사진 다 올림은 앨범, 일정 바뀜은 일정 화면(그 날짜)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const scope = self.registration.scope;
-  const album = !!(event.notification.data && event.notification.data.album);   // 사진 다 올림 알림이면 앨범
+  const data = event.notification.data || {};
+  const album = !!data.album;
+  const evDate = data.events && /^\d{4}-\d{2}-\d{2}$/.test(data.date || '') ? data.date : '';
   event.waitUntil(self.clients.matchAll({ type:'window', includeUncontrolled:true }).then((list) => {
     const win = list.find((w) => w.url.startsWith(scope));
-    if (win) { if (album) win.postMessage({ type:'open-album' }); return win.focus(); }
-    return self.clients.openWindow(album ? `${scope}#album` : scope);
+    if (win) {
+      if (album) win.postMessage({ type:'open-album' });
+      else if (evDate) win.postMessage({ type:'open-events', date:evDate });
+      return win.focus();
+    }
+    return self.clients.openWindow(album ? `${scope}#album` : evDate ? `${scope}#events=${evDate}` : scope);
   }));
 });
 
