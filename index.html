@@ -285,6 +285,24 @@ svg{display:block}
 .meal-step{display:block;margin-top:3px;font-size:14px;color:var(--muted);line-height:1.4}
 .meal-amt{display:block;margin-top:4px;font-size:14px;color:var(--muted);line-height:1.4}
 .meal-amt b{font-weight:400;color:var(--ink);white-space:nowrap}
+.meal-small{display:block;font-size:13px;color:var(--muted);line-height:1.4}
+.meal-amt small,.meal-parts small{display:block;font-size:12px;color:var(--muted)}
+.meal-parts{display:block;margin-top:6px;font-size:14px;line-height:1.45}
+.meal-snack{margin:8px 0 0;font-size:14px}
+.meal-ask{margin-top:10px;padding:10px 12px;border-radius:14px;background:var(--surface-2);font-size:14px;line-height:1.45}
+.meal-ask p{margin:0}
+.meal-ask .row{margin-top:8px}
+.meal-ask .chip{height:40px;background:var(--surface)}
+.meal-ask small{display:block;margin-top:6px;font-size:12px;color:var(--muted)}
+.meal-stage{margin:0 2px 8px;font-size:13px;color:var(--muted)}
+.meal-prep p{margin:0 0 2px}
+.md-meal{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.md-meal.eaten .md-line{margin-top:2px}
+.md-h{margin:0 2px 2px;font-size:13px;color:var(--muted)}
+.md-line small{font-size:12px;color:var(--muted)}
+.mrow-top > small{margin-left:auto;font-size:13px;color:var(--muted);white-space:nowrap}
+.mrow-top > small.now{color:var(--food)}
+.mrow-top > small.bad{color:var(--danger)}
 .meal-next{margin:8px 0 0;font-size:14px;color:var(--food);line-height:1.4}
 .meal-fever{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding:8px 8px 8px 12px;border-radius:14px;background:var(--lamp-soft);font-size:14px;line-height:1.4}
 .meal-fever .chip{flex:none;height:40px;background:var(--surface)}
@@ -353,6 +371,7 @@ svg{display:block}
 .mgap{padding:6px 2px;font-size:13px;color:var(--muted)}
 .madd{margin-top:10px}
 .chip.mknown .x{color:var(--muted)}
+span.chip{display:inline-flex;align-items:center}
 .madd .chips{margin-bottom:8px}
 .ev-note{margin:0 0 10px;padding:10px 12px;border-radius:14px;background:var(--lamp-soft);font-size:14px;line-height:1.45}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;margin:2px -6px 4px}
@@ -663,7 +682,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.11.0';
+const VERSION = '1.12.0';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -684,7 +703,7 @@ const LEVELS_PEE = ['소량', '보통', '묵직', '왕묵직'];
 const LEVELS_POO = ['소량', '보통', '푸짐', '왕푸짐'];
 const FOOD_SEEDS = ['미음', '소고기'];
 const LEVELS3 = ['조금', '보통', '많이'];
-const SYMPTOMS = ['토', '콧물', '기침'];
+const SYMPTOMS = ['토', '콧물', '기침', '발진', '설사'];   // 발진, 설사는 1.12.0(이유식 반응 기록용)
 const FEVER_SEEDS = ['해열제 빨강', '해열제 파랑'];
 const MED_SEEDS = ['감기약', '유산균'];
 const MED_UNITS = ['ml', '방울', '포'];
@@ -1033,7 +1052,7 @@ async function sync() {
     }
     const act = activeFever();
     const from = act && act.start.date < addDays(view, -2) && view === todayStr() ? act.start.date : addDays(view, -2), to = view;
-    const res = await api('sync', { from, to, photosVer, eventsVer, mealsVer, device:pushDevice() });
+    const res = await api('sync', { from, to, photosVer, eventsVer, mealsVer, foodSig:foodLog.length ? foodSig : '', device:pushDevice() });
     if (Array.isArray(res.fevers)) { feverSrv = res.fevers.map(normalize); store.set('fevers', feverSrv); }
     if (res.photosVer === undefined) photoSupport = 'no';   // 사진 기능이 없는 예전 연결 코드
     else {
@@ -1063,6 +1082,8 @@ async function sync() {
       mealsVer = res.mealsVer;
     }
     if (Array.isArray(res.foodDays)) foodDaysSrv = res.foodDays.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x));
+    takeFoodLog(res);   // 1.12.0: 시트의 이유식 기록 전부(바뀌었을 때만 옴)
+    foodRange = { from, to };
     saveMeals();
     takePush(res.push);
     if (res.prefs && Array.isArray(res.prefs.foods) && !foodsDirty) { foodList = res.prefs.foods.slice(0, 40); store.set('foods', foodList); }
@@ -1768,14 +1789,24 @@ function openRecord(type, existing, opt) {
     amount:'', unit:'', pee:'', poo:'', level:'', name:'', memo:'', who:'',
   };
   const body = h('div');
-  // 이유식(1.10.0): 그날 식단이 있으면 위에 한 줄, 메뉴 칩은 식단 재료로 미리 골라 둠(쌀은 '미음'이 있으면 미음). 고치기로 열면 그대로
+  // 이유식(1.12.0): 오늘이나 앞날의 새 기록은 계산한 다음 끼 재료를 칩으로 미리 고름(다 먹었으면 마지막 끼 칩 그대로).
+  // 쌀은 그 단계 이름 칩(미음, 죽, 무른밥) 중 메뉴 목록에 있는 것, 없으면 미음, 그것도 없으면 쌀. 지난 날짜와 고치기는 그대로
   let mealPick = null;
-  if (type === '이유식' && !existing) {
-    const x = mealInfo(st.date);
-    if (x && x.kind !== 'before' && x.foods.length) {
-      const a = mealAmount(st.date);
-      body.appendChild(h('p', { class:'meal-hint' }, `${st.date === todayStr() ? '오늘' : esc(md(st.date))} 식단: ${esc(x.menu)}${a.range ? `, 권장 ${a.range[0]}~${a.range[1]}g` : ''}`));
-      mealPick = x.foods.map((f) => (f === '쌀' && foodList.includes('미음') ? '미음' : f));
+  if (type === '이유식' && !existing && st.date >= todayStr() && mealList().length) {
+    const eng = mealEngine(), p = eng.plans.get(st.date);
+    if (p) {
+      const mi = p.recMeals.length;
+      if (mi < p.M) {
+        const m = p.meals[mi], a = mealAmt(st.date, eng), top = mealTop(a, mi);
+        const rice = [STAGE_WORD[p.stage]].find((w) => foodList.includes(w)) || (foodList.includes('미음') ? '미음' : '쌀');
+        mealPick = m.foods.map((f) => (f === '쌀' ? rice : f));
+        const when = st.date === todayStr() ? `오늘 ${mi ? '다음' : '첫'} 끼` : `${md(st.date)} 첫 끼`;
+        body.appendChild(h('p', { class:'meal-hint' }, `${esc(when)} 추천: ${esc(mealMenu(m.foods, p.stage))}, 권장 ${top[0] === top[1] ? `${top[0]}g쯤` : `${top[0]}~${top[1]}g`}`));
+      } else {
+        const lastMeal = p.recMeals[p.recMeals.length - 1];
+        mealPick = [];
+        lastMeal.recs.forEach((r) => recChips(r.name).forEach((c) => { if (!mealPick.includes(c)) mealPick.push(c); }));
+      }
       const missing = mealPick.filter((f) => !foodList.includes(f));
       if (missing.length) setFoods(foodList.concat(missing));
     }
@@ -2858,40 +2889,53 @@ function openEvents(selDate, monthKey, reuse, modeArg) {
     add.textContent = mode === 'meal' ? (mealList().length ? '식단 고치기' : '식단 만들기') : '+ 일정 추가';
   };
   const paintMeal = (y, m, start, weeks) => {
-    relayMeals();
-    const t = todayStr(), list = mealList();
+    const t = todayStr(), has = mealList().length > 0, eng = mealEngine();
     let grid = '';
     for (let i = 0; i < weeks * 7; i++) {
       const d = addDays(start, i), wd = i % 7;
-      const x = mealInfo(d, list);
-      let chip = '';
-      if (x && x.kind === 'new') chip = `<b class="cal-chip ${x.reacted ? 'mc-bad' : x.k === 1 ? 'mc-first' : 'mc-soft'}">${esc(x.food)}</b>`;
-      else if (x && (x.kind === 'rest' || x.kind === 'skip')) chip = '<b class="cal-chip mc-old">먹던 것</b>';
-      const e = d < t ? eatenOn(d) : null;
-      const g = e && e.g ? `<small class="cal-g">${e.g}g</small>` : '';
+      let chip = '', g = '', lab = '';
+      const ps = d <= t ? eng.past(d) : null;
+      if (ps && (d < t || ps.day)) {   // 지난 날(오늘은 기록이 있으면): 그날 새 재료였던 재료, 없으면 먹던 것, 아래 g 합
+        const x = ps.newFoods[0];
+        chip = x ? `<b class="cal-chip ${x.bad ? 'mc-bad' : x.k === 1 ? 'mc-first' : 'mc-soft'}">${esc(x.f)}</b>` : '<b class="cal-chip mc-old">먹던 것</b>';
+        lab = x ? `, 새 재료 ${x.f}` : ', 먹던 것만';
+        if (ps.day.g) { g = `<small class="cal-g">${ps.day.g}g</small>`; lab += `, 먹은 양 ${ps.day.g}g`; }
+      } else if (d >= t && has) {   // 앞날: 계산한 새 재료(첫날 진하게)나 먹던 것
+        const p = eng.plans.get(d);
+        if (p) { chip = p.nf ? `<b class="cal-chip ${p.k === 1 ? 'mc-first' : 'mc-soft'}">${esc(p.nf)}</b>` : '<b class="cal-chip mc-old">먹던 것</b>'; lab = p.nf ? `, 새 재료 ${p.nf}` : ', 먹던 것만'; }
+      }
       const cls = ['cal-day', d.slice(0, 7) !== mon ? 'other' : d < t ? 'gone' : '', d === t ? 'today' : '', d === sel ? 'sel' : '', wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''].filter(Boolean).join(' ');
-      const label = `${evDayLong(d)}${x && x.kind === 'new' ? `, 새 재료 ${x.food}` : x && (x.kind === 'rest' || x.kind === 'skip') ? ', 먹던 것만' : ''}${e && e.g ? `, 먹은 양 ${e.g}g` : ''}`;
-      grid += `<button class="${cls}" type="button" data-d="${d}" aria-label="${esc(label)}" aria-pressed="${d === sel}"><span class="n">${parseD(d).getDate()}</span><span class="cal-chips">${chip}${g}</span></button>`;
+      grid += `<button class="${cls}" type="button" data-d="${d}" aria-label="${esc(evDayLong(d) + lab)}" aria-pressed="${d === sel}"><span class="n">${parseD(d).getDate()}</span><span class="cal-chips">${chip}${g}</span></button>`;
     }
-    // 이번 주 준비할 재료(고른 날부터 7일)
-    const prep = [];
-    for (let i = 0; i < 7; i++) { const x = mealInfo(addDays(sel, i), list); if (x && x.kind !== 'done' && x.kind !== 'before') x.foods.forEach((f) => { if (!prep.includes(f)) prep.push(f); }); }
     const wl = weightLine();
-    let rows = '';
+    let rows = '', ahead = false;
     for (let i = 0; i < 14; i++) {
-      const d = addDays(sel, i), x = mealInfo(d, list);
-      if (!x || x.kind === 'before') continue;
-      const a = mealAmount(d), dd = parseD(d);
-      const right = d < t ? eatenText(eatenOn(d)) : a.range ? `${a.range[0]}~${a.range[1]}g, ${a.times}` : a.times;
-      rows += `<li><button class="mli${d < t ? ' past' : ''}" type="button" data-md="${d}"><span class="mli-d"><b>${dd.getDate()}일 (${WEEK[dd.getDay()]})</b><small>${a.n ? `${a.n}일째` : ''}</small></span><span class="ev-main"><span class="ev-title">${esc(x.menu)}</span><span class="ev-sub"><span>${esc(x.kind === 'done' ? '식단이 끝났어요' : mealStepText(x))}</span></span></span><span class="mli-r">${esc(right)}</span></button></li>`;
+      const d = addDays(sel, i), dd = parseD(d), a = mealAmt(d, eng);
+      const ps = d <= t ? eng.past(d) : null;
+      let menu = '', sub = '', right = '';
+      if (ps && (d < t || ps.day)) {
+        menu = mealMenu(ps.day.meals[0].foods, mealStage(d).stage) + (ps.day.meals.length > 1 ? ` 외 ${ps.day.meals.length - 1}끼` : '');
+        sub = ps.newFoods.length ? ps.newFoods.map((x) => `${x.f} 새 재료 ${x.k}일째`).join(', ') : '먹던 것만';
+        right = ps.day.g ? `먹은 양 ${ps.day.g}g` : '먹었어요';
+      } else if (d >= t && has) {
+        const p = eng.plans.get(d);
+        if (!p || !a) continue;
+        const left = p.meals.filter((x) => !x.eaten);
+        menu = mealMenu(p.meals[0].foods, p.stage) + (p.M > 1 ? ` 외 ${p.M - 1}끼` : '');
+        sub = planStep(p);
+        right = `${a.range}, ${a.times}`;
+        if (a.future) ahead = true;
+        if (!left.length) continue;
+      } else continue;
+      rows += `<li><button class="mli${d < t ? ' past' : ''}" type="button" data-md="${d}"><span class="mli-d"><b>${dd.getDate()}일 (${WEEK[dd.getDay()]})</b><small>${a ? `${a.N}일째` : ''}</small></span><span class="ev-main"><span class="ev-title">${esc(menu)}</span><span class="ev-sub"><span>${esc(sub)}</span></span></span><span class="mli-r">${esc(right)}</span></button></li>`;
     }
-    body.innerHTML = `${modeBar()}${mealOldNote()}${mealBadNote(list)}<div class="cal-nav"><button class="arrow" type="button" data-act="prev" aria-label="이전 달">${icon('left')}</button><h3>${y}년 ${m}월</h3><button class="arrow" type="button" data-act="next" aria-label="다음 달">${icon('right')}</button></div>
+    body.innerHTML = `${modeBar()}${mealOldNote()}${mealBadNote(eng)}<p class="meal-stage">${esc(stageLine())}</p><div class="cal-nav"><button class="arrow" type="button" data-act="prev" aria-label="이전 달">${icon('left')}</button><h3>${y}년 ${m}월</h3><button class="arrow" type="button" data-act="next" aria-label="다음 달">${icon('right')}</button></div>
       <div class="cal-swipe${slide ? ` go-${slide}` : ''}"><div class="cal-week">${WEEK.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
       <div class="cal-grid">${grid}</div></div>
       <p class="cal-legend"><span><i class="mdot2 mc-first"></i>새 재료 첫날</span><span><i class="mdot2 mc-soft"></i>새 재료</span><span><i class="mdot2 mc-old"></i>먹던 것만</span></p>
-      ${list.length ? `<p class="meal-prep">이번 주 준비할 재료: ${esc(prep.join(', ') || '없음')}<small>냉동 큐브는 1주일 안에 써요</small></p>` : '<p class="evday-empty">아직 식단이 없어요. 아래 식단 만들기를 눌러 주세요</p>'}
+      ${has ? prepLine(eng) : '<p class="evday-empty">아직 식단이 없어요. 아래 식단 만들기를 눌러 주세요</p>'}
       ${wl ? `<p class="meal-w">${esc(wl)} <small>참고</small></p>` : ''}
-      ${rows ? `<p class="md-small">${MEAL_CHECK}</p><ul class="evl mlil">${rows}</ul>` : ''}`;
+      ${rows ? `<p class="md-small">${MEAL_CHECK}${ahead ? '<br>앞날 양은 이번 주 기준으로 미리 본 값이에요. 그 주가 되면 실제 먹은 양으로 다시 정해요' : ''}</p><ul class="evl mlil">${rows}</ul>` : ''}`;
     paintHead();
   };
   const paint = () => {
@@ -3183,22 +3227,44 @@ function openEventSheet(existing, date, back) {
   if (!allDay) requestAnimationFrame(mountWheels);
 }
 
-/* ---------- 이유식 식단 (1.10.0) ---------- */
-/* 재료 순서로 짬: 새 재료 하나를 며칠(기본 3일) 먹이고 다음 재료로. 날짜는 앱이 이어 붙여 정함.
-   시트 '이유식 식단' 탭에 한 단계씩, 가족 공통 설정(매일 넣는 재료, 먹어 본 재료, 일차 보정)은 mealCfg. 바뀌어도 알림 없음.
-   권장량은 이유식 일차와 월령으로만 정하는 참고값(03의 근거). 체중은 참고로 옆에만 보여 줌.
-   실제 식단은 시트에만 있고 여기에는 일반 예시(기본 순서, 빠른 재료)만 둠 */
+/* ---------- 이유식 식단 (1.10.0, 1.12.0 기록을 보고 날마다 다시 짬) ---------- */
+/* 식단 줄('이유식 식단' 탭)은 새 재료의 순서만 정함('쉼' 줄은 그 날짜에 새 재료 쉼). 그날 메뉴, 날짜, 양은 이유식 기록, 생후 개월,
+   오늘 먹은 것을 보고 화면을 그릴 때마다 다시 계산(시트에 저절로 쓰지 않음). 안 먹인 날, 쉬는 날은 저절로 뒤로 밀리고,
+   식단 줄이 끝나면 생후 개월에 맞는 자동 표에서 이어 고름. 건강 숫자와 문구는 03의 근거만.
+   실제 식단은 시트에만 있고 여기에는 일반 기본값(기본 순서, 빠른 재료, 자동 표)만 둠 */
 const MEAL_ORDER = ['쌀', '소고기', '애호박', '청경채', '달걀', '밀가루', '브로콜리', '감자', '양배추', '단호박', '고구마', '오이'];
 const MEAL_MORE = ['찹쌀', '오트밀', '무', '콜리플라워', '배추', '사과', '배'];
 const MEAL_BASE = ['쌀', '소고기'];
 const MEAL_DAYS = 3;
+const MEAL_AHEAD = 180;   // 오늘부터 며칠 앞까지 계산
+// 자동 표(근거 15, 일반 기본값): 그날 단계까지의 표를 위에서부터
+const AUTO_FOODS = {
+  '초기':['찹쌀', '오트밀', '감자', '고구마', '애호박', '단호박'],
+  '중기':['당근', '닭고기', '현미', '시금치', '두부', '귀리', '대구', '브로콜리', '양배추', '달걀'],
+  '후기':['돼지고기', '바나나', '사과', '복숭아', '콩'],
+};
+const STAGES = ['초기', '중기', '후기'];
+// 재료 묶음(메뉴와 재료별 양). 여기에 없는 재료는 채소
+const GRAINS = ['쌀', '찹쌀', '현미', '오트밀', '귀리', '보리', '흑미', '차조', '수수', '밀가루'];
+const PROTEINS = ['소고기', '닭고기', '돼지고기', '달걀', '두부', '대구', '광어', '가자미', '연어', '생선', '콩'];
+const FRUITS = ['사과', '배', '바나나', '복숭아', '자두', '수박', '딸기', '블루베리', '귤', '키위', '망고', '감', '포도', '참외', '멜론'];
+const foodGroup = (f) => (GRAINS.includes(f) ? 'grain' : PROTEINS.includes(f) ? 'protein' : FRUITS.includes(f) ? 'fruit' : 'veg');
+const RICE_CHIPS = ['미음', '쌀미음', '죽', '쌀죽', '무른밥', '진밥', '밥'];
+const FOOD_ALIAS = { '쇠고기':'소고기', '계란':'달걀', '노른자':'달걀', '닭':'닭고기', '닭안심':'닭고기', '닭가슴살':'닭고기' };
+const RICE_WORDS = ['무른밥', '진밥', '쌀미음', '쌀죽', '미음', '죽', '밥'];   // 칩 끝의 미음, 죽, 밥은 재료로 안 셈(곡류가 없으면 쌀)
 // 알레르기 주의 재료(식약처 예시 식품과 그 가공품). 이름이 '밀'이거나 이 낱말이 들어 있으면. '오트밀'은 아님, 소고기는 넣지 않음
 const ALLERGY_WORDS = ['달걀', '계란', '메추리알', '우유', '치즈', '요거트', '요구르트', '밀가루', '통밀', '국수', '빵', '대두', '콩', '두부', '두유',
   '땅콩', '호두', '잣', '견과', '메밀', '생선', '고등어', '연어', '대구', '새우', '게', '조개', '굴', '오징어', '복숭아', '귤', '오렌지', '토마토', '닭', '돼지'];
 const isAllergyFood = (f) => f === '밀' || ALLERGY_WORDS.some((w) => f.includes(w));
 const HONEY_MSG = '꿀은 돌 전에는 먹이면 안 돼요';
 const STAGE_WORD = { '초기':'미음', '중기':'죽', '후기':'무른밥' };
-const STAGE_THICK = { '초기':'10배죽', '중기':'7~8배죽', '후기':'5배죽' };
+const RICE_NAME = { '초기':'쌀미음', '중기':'쌀죽', '후기':'무른밥' };
+const STAGE_THICK = { '초기':'10배죽(쌀 1 : 물 10)', '중기':'7~8배죽(쌀 1 : 물 7~8)', '후기':'5배죽(쌀 1 : 물 5)' };
+const STAGE_MEALS = { '초기':1, '중기':2, '후기':3 };
+const STAGE_TIMES = { '초기':'하루 1번', '중기':'하루 2번과 간식 1번', '후기':'하루 3번과 간식 1번' };
+const STAGE_MAX = { '초기':80, '중기':100, '후기':120 };   // 한 번 최대(근거 1, 2, 11)
+const STAGE_RATIO = { '초기':[7, 2, 1], '중기':[5, 3, 2], '후기':[5, 3, 2] };   // 곡류 : 채소 : 단백질(근거 15)
+const MEAL_NTH = ['첫 끼', '둘째 끼', '셋째 끼'];
 const MEAL_KEYS = ['date', 'days', 'food', 'kind', 'result', 'memo'];
 const cleanFood = (v) => String(v == null ? '' : v).replace(/,/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20);
 const eunNeun = (w) => { const c = w.charCodeAt(w.length - 1); return c >= 0xAC00 && c <= 0xD7A3 && (c - 0xAC00) % 28 ? '은' : '는'; };
@@ -3206,7 +3272,7 @@ function normMealCfg(c) {
   if (!c || typeof c !== 'object') return null;
   const list = (a) => Array.from(new Set((Array.isArray(a) ? a : []).map(cleanFood).filter(Boolean))).slice(0, 60);
   const adj = Math.round(Number(c.dayAdj) || 0);
-  return { base:list(c.base), known:list(c.known), dayAdj:Math.max(-60, Math.min(60, adj)) };
+  return { base:list(c.base), known:list(c.known), dayAdj:Math.max(-60, Math.min(60, adj)), skip:list(c.skip) };
 }
 function normMeal(m) {
   const s = (v) => String(v == null ? '' : v);
@@ -3220,12 +3286,18 @@ let mealOutbox = PREVIEW ? [] : store.get('mealOutbox', []);
 let mealSupport = PREVIEW ? 'yes' : store.get('mealSupport', '');   // 'no'면 식단을 모르는 예전 연결 코드: 식단은 이 폰에만
 let mealCfg = PREVIEW ? null : normMealCfg(store.get('mealCfg', null));
 let foodDaysSrv = PREVIEW ? [] : store.get('foodDays', []);   // 시트에서 이유식 기록이 있는 날짜(sync의 foodDays)
+// 1.12.0: 시트의 이유식 기록 전부 [날짜, 시간, 메뉴, g](sync의 foodLog), 그 서명, 마지막으로 동기화한 기간, 연결 코드가 foodLog를 아는지
+let foodLog = PREVIEW ? [] : store.get('foodLog', []);
+let foodSig = PREVIEW ? '' : store.get('foodSig', '');
+let foodRange = PREVIEW ? null : store.get('foodRange', null);
+let foodLogOk = PREVIEW ? 'yes' : store.get('foodLogOk', '');
 function saveMeals() {
   if (PREVIEW) return;
   store.set('meals', meals); store.set('mealsVer', mealsVer); store.set('mealOutbox', mealOutbox); store.set('mealSupport', mealSupport);
   store.set('mealCfg', mealCfg); store.set('foodDays', foodDaysSrv);
+  store.set('foodLog', foodLog); store.set('foodSig', foodSig); store.set('foodRange', foodRange); store.set('foodLogOk', foodLogOk);
 }
-const mealConf = () => mealCfg || { base:MEAL_BASE.slice(), known:[], dayAdj:0 };
+const mealConf = () => mealCfg || { base:MEAL_BASE.slice(), known:[], dayAdj:0, skip:[] };
 function queueMeal(op) {
   mealOutbox = mealOutbox.filter((o) => o.id !== op.id);
   mealOutbox.push(op);
@@ -3233,14 +3305,28 @@ function queueMeal(op) {
 const mealEnd = (m) => addDays(m.date, m.days - 1);
 const mealCmp = (a, b) => a.date.localeCompare(b.date) || (a.kind === '쉼' ? -1 : 0) - (b.kind === '쉼' ? -1 : 0) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 const mealList = () => Object.values(meals).sort(mealCmp);
-// 시트의 식단 목록을 받을 때: 아직 안 올라간 이 폰의 저장과 삭제, 설정이 이김
+// 시트의 식단 목록을 받을 때: 아직 안 올라간 이 폰의 저장과 삭제, 설정이 이김. skip이 없는 설정(예전 연결 코드)이면 이 폰의 skip을 그대로
 function mergeMeals(list, conf) {
   const pend = new Set(mealOutbox.map((o) => o.id));
   const next = {};
   list.map(normMeal).filter((m) => m.id && !pend.has(m.id)).forEach((m) => { next[m.id] = m; });
   pend.forEach((id) => { if (meals[id]) next[id] = meals[id]; });
   meals = next;
-  if (!pend.has('__cfg') && conf !== undefined) mealCfg = normMealCfg(conf);
+  if (!pend.has('__cfg') && conf !== undefined) {
+    const keepSkip = mealConf().skip;
+    mealCfg = normMealCfg(conf);
+    if (mealCfg && !(conf && Array.isArray(conf.skip))) mealCfg.skip = keepSkip;
+  }
+}
+// sync의 foodLog를 받아 둠(항목 모양 검사)
+function takeFoodLog(res) {
+  if (res.foodSig === undefined) { foodLogOk = 'no'; return; }
+  foodLogOk = 'yes';
+  if (Array.isArray(res.foodLog)) {
+    foodLog = res.foodLog.filter((x) => Array.isArray(x) && /^\d{4}-\d{2}-\d{2}$/.test(String(x[0])))
+      .map((x) => [String(x[0]), String(x[1] || '').slice(0, 5), String(x[2] || '').slice(0, 200), Number(x[3]) > 0 ? Number(x[3]) : 0]);
+    foodSig = String(res.foodSig);
+  }
 }
 async function sendMeals() {
   let guard = 0;
@@ -3253,7 +3339,7 @@ async function sendMeals() {
     if ((res.results || []).some((x) => !x.ok)) console.warn('일부 식단을 시트가 받지 않았어요', res.results);
   }
 }
-// 바뀐 줄만 저장해 대기열로. removed는 지울 id
+// 바뀐 줄만 저장해 대기열로(사람이 고치거나 버튼을 누를 때만). removed는 지울 id
 function commitMeals(next, removed, quiet) {
   const now = new Date().toISOString();
   let n = 0;
@@ -3276,169 +3362,378 @@ function setMealCfg(c) {
   saveMeals(); scheduleSync();
 }
 
-/* 날짜 배치(03): 시작일이 오늘이거나 지난 단계는 그대로. 아직 시작 안 한 단계는 순서대로 빈틈없이 이어 붙이고,
-   알레르기 주의 재료는 평일에만, 접종 날과 다음 날에는 새 재료를 시작하지 않음. '쉼'은 끼운 날보다 앞당기지 않음 */
+/* 쉬는 날: 제목에 '접종'이 든 일정 날과 다음 날 */
 function vaccineDays() {
   const t = todayStr(), out = new Set();
-  evRange(addDays(t, -2), addDays(t, 400)).forEach((e) => {
+  evRange(addDays(t, -400), addDays(t, MEAL_AHEAD + 2)).forEach((e) => {
     if (!String(e.title).includes('접종')) return;
     for (let d = e.date; d <= evEnd(e); d = addDays(d, 1)) { out.add(d); out.add(addDays(d, 1)); }
   });
   return out;
 }
 const isWeekend = (d) => { const w = parseD(d).getDay(); return w === 0 || w === 6; };
-const mealBlocked = (food, d, vac) => vac.has(d) || (isAllergyFood(food) && isWeekend(d));
-function layoutMeals(list, start) {
-  const t = todayStr(), vac = vaccineDays();
-  const free = list.filter((m) => !(m.date && m.date <= t));
-  let cursor = null;
-  const out = [];
-  list.forEach((m0) => {
-    const m = Object.assign({}, m0);
-    if (m.date && m.date <= t) {   // 이미 시작한 단계: 날짜 그대로(며칠만 바뀔 수 있음)
-      const after = addDays(m.date, m.days);
-      if (!cursor || after > cursor) cursor = after;
-      out.push(m); return;
+
+/* 메뉴 칩을 재료로: 미음, 죽, 밥은 쌀. 아는 재료 이름과 별칭을 긴 것부터 겹치지 않게 찾고, 곡류가 없고 미음, 죽, 밥으로 끝나면 쌀을 더함.
+   못 찾으면 칩 이름 그대로(사용자가 만든 메뉴) */
+function foodNames(rows, conf) {
+  const all = MEAL_ORDER.concat(MEAL_MORE, AUTO_FOODS['초기'], AUTO_FOODS['중기'], AUTO_FOODS['후기'], GRAINS, PROTEINS, FRUITS,
+    rows.map((r) => r.food), conf.known, conf.base, Object.keys(FOOD_ALIAS), RICE_WORDS);
+  return Array.from(new Set(all.filter(Boolean))).sort((a, b) => b.length - a.length);
+}
+function chipFoods(chip, names) {
+  const c = String(chip || '').trim();
+  if (!c) return [];
+  if (RICE_CHIPS.includes(c)) return ['쌀'];
+  const found = [];
+  let rest = c;
+  names.forEach((n) => {
+    let i;
+    while ((i = rest.indexOf(n)) >= 0) {
+      const f = FOOD_ALIAS[n] || n;
+      if (!RICE_WORDS.includes(n) && !found.includes(f)) found.push(f);
+      rest = rest.slice(0, i) + '\u0000'.repeat(n.length) + rest.slice(i + n.length);
     }
-    if (!cursor) cursor = start || free.map((x) => x.date).filter(Boolean).sort()[0] || addDays(t, 1);
-    if (cursor <= t) cursor = addDays(t, 1);   // 앞 단계가 이미 끝났으면 내일부터
-    let d = cursor;
-    if (m.kind === '쉼') { if (m.date && m.date > d) d = m.date; }   // 하루 미루기로 끼운 날은 그대로
-    else { let g = 0; while (g++ < 60 && mealBlocked(m.food, d, vac)) d = addDays(d, 1); }
-    m.date = d;
-    cursor = addDays(d, m.days);
-    out.push(m);
+  });
+  if (!found.length) return [c];
+  if (!found.some((f) => foodGroup(f) === 'grain') && /(미음|죽|밥)$/.test(c)) found.push('쌀');
+  return found;
+}
+const recChips = (name) => String(name || '').split(',').map((x) => x.trim()).filter(Boolean);
+function recFoods(name, names) {
+  const out = [];
+  recChips(name).forEach((ch) => chipFoods(ch, names).forEach((f) => { if (!out.includes(f)) out.push(f); }));
+  return out;
+}
+/* 날짜별 이유식 기록: 마지막으로 동기화한 기간과 아직 안 올라간 이유식 기록이 있는 날짜는 이 폰 기록, 그 밖은 foodLog.
+   foodLog를 모르는 연결 코드면 이 폰 기록만 */
+function foodRecs() {
+  const pend = new Set(outbox.filter((o) => o.op === 'save' && o.record && o.record.type === '이유식').map((o) => o.record.date));
+  const hasLog = foodLogOk === 'yes';
+  const useLocal = (d) => !hasLog || pend.has(d) || (foodRange && d >= foodRange.from && d <= foodRange.to);
+  const out = [];
+  Object.values(records).forEach((r) => {
+    if (r.type === '이유식' && useLocal(r.date)) out.push({ id:r.id, date:r.date, time:r.time || '00:00', name:r.name || '', g:hasAmount(r) && Number(r.amount) > 0 ? Number(r.amount) : 0 });
+  });
+  if (hasLog) foodLog.forEach((x) => { if (!useLocal(x[0])) out.push({ id:'', date:x[0], time:x[1] || '00:00', name:x[2], g:x[3] }); });
+  return out.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+}
+// 끼 묶기: 같은 날 앞 기록과 1시간 30분 안이면 같은 끼
+function groupMeals(recs, names) {
+  const out = [];
+  let prev = null;
+  recs.forEach((r) => {
+    const m = hmMin(r.time);
+    if (!out.length || m - prev > 90) out.push({ recs:[], foods:[], g:0 });
+    const cur = out[out.length - 1];
+    cur.recs.push(r); cur.g += r.g;
+    recFoods(r.name, names).forEach((f) => { if (!cur.foods.includes(f)) cur.foods.push(f); });
+    prev = m;
   });
   return out;
 }
-// 화면을 그릴 때: 접종 일정이 새로 생기거나 바뀌어 아직 시작 안 한 단계가 규칙에 걸리면 고쳐 저장
-function relayMeals() {
-  const list = mealList();
-  if (list.length) commitMeals(layoutMeals(list), [], true);
-}
-// 하루 미루기: 그날이 단계 둘째 날 이후면 그 단계를 하루 늘림, 그날 새 단계가 시작하면 앞에 '쉼' 하루. 바꿀 게 없으면 null
-function postponeList(list, d) {
-  const out = list.map((m) => Object.assign({}, m));
-  const i = out.findIndex((m) => m.date <= d && d <= mealEnd(m));
-  if (i < 0) return null;
-  const m = out[i];
-  if (d > m.date || m.kind === '쉼') m.days = Math.min(14, m.days + 1);
-  else {
-    out.splice(i, 0, { id:newId(), date:d, days:1, food:'', kind:'쉼', result:'', memo:'', createdAt:'', updatedAt:'' });
-    m.date = addDays(d, 1);
-  }
-  return layoutMeals(out);
-}
-function postponeFrom(d) {
-  const next = postponeList(mealList(), d);
-  if (!next) return false;
-  commitMeals(next, []);
-  return true;
-}
 
-/* 그날 식단 */
-const reactedFoods = (list) => Array.from(new Set(list.filter((m) => m.kind === '새 재료' && m.result === '반응').map((m) => m.food)));
-// 먹어 본 재료: 식단 전부터 먹던 것 + 그날 전에 끝난 새 재료(반응 있었던 것은 뺌)
-function triedFoods(d, list, conf) {
-  const bad = reactedFoods(list);
-  const out = (conf || mealConf()).known.slice();
-  list.forEach((m) => { if (m.kind === '새 재료' && mealEnd(m) < d && !out.includes(m.food)) out.push(m.food); });
-  return out.filter((f) => !bad.includes(f));
-}
 function monthsAt(d) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cfg.birth || '')) return null;
   const b = parseD(cfg.birth), t = parseD(d);
   return (t.getFullYear() - b.getFullYear()) * 12 + (t.getMonth() - b.getMonth()) - (t.getDate() < b.getDate() ? 1 : 0);
 }
+const monthDate = (n) => { const b = parseD(cfg.birth); return dstr(new Date(b.getFullYear(), b.getMonth() + n, b.getDate())); };
 // 단계(만 개월): 초기는 7개월 전, 중기 7~8개월, 후기 9개월부터. 생일이 없으면 초기
 function mealStage(d) {
   const mo = monthsAt(d);
-  if (mo == null) return { stage:'초기', noBirth:true, midNew:false };
+  if (mo == null) return { stage:'초기', noBirth:true, midNew:false, midFirst:false };
   const stage = mo >= 9 ? '후기' : mo >= 7 ? '중기' : '초기';
-  let midNew = false;
-  if (stage === '중기') {   // 중기로 넘어간 첫 7일
-    const b = parseD(cfg.birth), m7 = dstr(new Date(b.getFullYear(), b.getMonth() + 7, b.getDate()));
-    midNew = daysBetween(m7, d) < 7;
-  }
-  return { stage, noBirth:false, midNew };
+  const m7 = monthDate(7);
+  return { stage, noBirth:false, midNew:stage === '중기' && daysBetween(m7, d) < 7, midFirst:d === m7 };
 }
 const mealMenu = (foods, stage) => {
   const w = STAGE_WORD[stage], parts = foods.filter((f) => f !== '쌀');
   if (!parts.length) return foods.includes('쌀') ? (stage === '후기' ? '무른밥' : `쌀${w}`) : w;
   return `${parts.join(' ')} ${w}`;
 };
-function foodDaySet() {
-  const s = new Set(foodDaysSrv);
-  Object.values(records).forEach((r) => { if (r.type === '이유식') s.add(r.date); });
-  return s;
+
+/* 식단 계산(1.12.0). list, conf를 주면 그걸로(고치기 창 미리 보기) */
+function mealEngine(list0, conf0) {
+  const list = (list0 || mealList()).slice().sort(mealCmp);
+  const conf = conf0 || mealConf();
+  const rows = list.filter((m) => m.kind === '새 재료');
+  const rests = list.filter((m) => m.kind === '쉼');
+  const names = foodNames(rows, conf);
+  const t = todayStr(), vac = vaccineDays();
+  const known = new Set(conf.known), skip = new Set(conf.skip);
+  const rowOf = new Map();
+  rows.forEach((r) => { if (!rowOf.has(r.food)) rowOf.set(r.food, r); });
+  const need = (f) => (rowOf.get(f) ? rowOf.get(f).days : MEAL_DAYS);
+  const reacted = (f) => !!(rowOf.get(f) && rowOf.get(f).result === '반응');
+  const order = (f) => { const i = rows.findIndex((r) => r.food === f); return i < 0 ? 9999 : i; };
+  // 날짜별 기록과 재료별 먹은 날짜(실제)
+  const byDate = new Map();
+  foodRecs().forEach((r) => { if (!byDate.has(r.date)) byDate.set(r.date, { recs:[] }); byDate.get(r.date).recs.push(r); });
+  const real = new Map();
+  byDate.forEach((v, d) => {
+    v.meals = groupMeals(v.recs, names);
+    v.foods = []; v.g = 0;
+    v.meals.forEach((m) => { v.g += m.g; m.foods.forEach((f) => { if (!v.foods.includes(f)) v.foods.push(f); }); });
+    v.foods.forEach((f) => { if (!real.has(f)) real.set(f, []); real.get(f).push(d); });
+  });
+  real.forEach((a) => a.sort());
+  const copy = (m) => { const o = new Map(); m.forEach((a, f) => o.set(f, a.slice())); return o; };
+  const sim = copy(real);
+  const add = (m, f, d) => { if (!m.has(f)) m.set(f, []); const a = m.get(f); if (!a.includes(d)) { a.push(d); a.sort(); } };
+  const cnt = (m, f, d) => (m.get(f) || []).filter((x) => x < d).length;
+  const lastBy = (m, f, d) => { const a = (m.get(f) || []).filter((x) => x <= d); return a.length ? a[a.length - 1] : ''; };
+  const firstOf = (m, f) => (m.get(f) || [])[0] || '';
+  const tried = (m, f, d) => !reacted(f) && (known.has(f) || cnt(m, f, d) >= need(f));
+  const eating = (m, f, d) => !reacted(f) && !known.has(f) && !skip.has(f) && cnt(m, f, d) >= 1 && cnt(m, f, d) < need(f);
+  const fresh = (m, f, d) => !known.has(f) && !reacted(f) && !skip.has(f) && cnt(m, f, d) === 0;
+  // 다음 새 재료: 식단 줄 순서대로 아직인 것, 없으면 자동 표(그날 단계까지)
+  const nextFood = (m, d, stage, noBirth) => {
+    const r = rows.find((x) => fresh(m, x.food, d));
+    if (r) return r.food;
+    const upto = noBirth ? ['초기'] : STAGES.slice(0, STAGES.indexOf(stage) + 1);
+    for (const s of upto) for (const f of AUTO_FOODS[s]) if (!rowOf.has(f) && fresh(m, f, d)) return f;
+    return '';
+  };
+  // 섞는 재료: 그날 먹어 본 채소(또는 과일) 중 마지막으로 먹은 날이 가장 오래된 것부터
+  const pool = (m, d, group, excl) => Array.from(new Set(conf.known.concat(Array.from(m.keys()))))
+    .filter((f) => (group === 'fruit' ? foodGroup(f) === 'fruit' : foodGroup(f) === 'veg') && tried(m, f, d) && !skip.has(f) && !excl.includes(f))
+    .sort((a, b) => lastBy(m, a, d).localeCompare(lastBy(m, b, d)) || firstOf(m, a).localeCompare(firstOf(m, b)) || order(a) - order(b) || a.localeCompare(b));
+  const plans = new Map();
+  const hour = new Date().getHours();
+  for (let i = 0; i < MEAL_AHEAD; i++) {
+    const d = addDays(t, i), st = mealStage(d), stage = st.stage, M = STAGE_MEALS[stage];
+    const day = i === 0 ? byDate.get(d) : null;
+    const recMeals = day ? day.meals : [];
+    const restRow = rests.find((r) => r.date <= d && d <= mealEnd(r));
+    const rest = restRow ? '하루 쉬어요' : vac.has(d) ? '접종 날이라 새 재료 쉼' : i === 0 && activeFever() ? '열이 있어서 새 재료 쉼' : '';
+    const now = Array.from(sim.keys()).filter((f) => eating(sim, f, d))
+      .sort((a, b) => lastBy(sim, b, addDays(d, -1)).localeCompare(lastBy(sim, a, addDays(d, -1))) || order(a) - order(b));
+    const cur = now[0] || '';
+    let newFoods = [], reason = '', none = false, fromRec = false;
+    if (recMeals.length) {   // 오늘은 기록이 이김: 첫 끼에 먹는 중이거나 아직인 재료가 있으면 그게 새 재료
+      const f1 = recMeals[0].foods.filter((f) => eating(sim, f, d) || fresh(sim, f, d));
+      if (f1.length) { newFoods = f1.sort((a, b) => (a === cur ? -1 : b === cur ? 1 : 0)); fromRec = true; }
+      else reason = '오늘 첫 끼는 먹던 것만 먹었어요';
+    } else if (rest) reason = rest;
+    else if (cur) newFoods = [cur];
+    else {
+      const nx = nextFood(sim, d, stage, st.noBirth);
+      if (!nx) none = true;
+      else if (isAllergyFood(nx) && isWeekend(d)) reason = `주말이라 ${nx}${eunNeun(nx)} 월요일부터`;
+      else if (i === 0 && !day && hour >= 15) reason = '새 재료는 오전이나 낮에 시작해요. 내일부터';
+      else newFoods = [nx];
+    }
+    const nf = newFoods[0] || '';
+    const k = nf ? cnt(sim, nf, d) + 1 : 0, n = nf ? need(nf) : 0;
+    const base = conf.base.filter((f) => tried(sim, f, d));   // 매일 넣는 재료(먹어 본 것, skip은 안 봄)
+    const vegs = pool(sim, d, 'veg', base.concat(newFoods));
+    const out = [];
+    let j = 0;
+    for (let mi = 0; mi < M; mi++) {
+      if (mi < recMeals.length) { out.push({ eaten:true, foods:recMeals[mi].foods, g:recMeals[mi].g, recs:recMeals[mi].recs }); continue; }
+      const mix = vegs.length ? vegs[j % vegs.length] : '';
+      j++;
+      const foods = base.concat(mi === 0 ? newFoods.filter((f) => !base.includes(f)) : []);
+      if (mix && !foods.includes(mix)) foods.push(mix);
+      out.push({ eaten:false, foods, mix });
+    }
+    const snack = stage === '초기' ? '' : (pool(sim, d, 'fruit', newFoods)[0] || '');
+    // 앞날은 계산대로 먹었다고 치고 이어 감
+    out.forEach((m) => { if (!m.eaten) m.foods.forEach((f) => add(sim, f, d)); });
+    if (snack) add(sim, snack, d);
+    plans.set(d, { d, stage, st, M, meals:out, snack, newFoods, nf, k, n, reason, rest, none, fromRec, recMeals, done:recMeals.length >= M });
+  }
+  // 지난 날(또는 오늘 기록): 실제로 먹은 것만. 그날 먹는 중이었거나 처음 먹은 재료
+  const past = (d) => {
+    const day = byDate.get(d);
+    if (!day) return null;
+    const nfs = day.foods.filter((f) => !known.has(f) && !skip.has(f) && cnt(real, f, d) < need(f))
+      .map((f) => ({ f, k:cnt(real, f, d) + 1, n:need(f), bad:reacted(f) }));
+    return { d, day, newFoods:nfs };
+  };
+  // 재료 줄의 상태(오늘까지 먹은 것 기준)
+  const tomorrow = addDays(t, 1);
+  const status = (f) => (reacted(f) ? 'bad' : known.has(f) || cnt(real, f, tomorrow) >= need(f) ? 'tried' : cnt(real, f, tomorrow) >= 1 ? 'eating' : 'yet');
+  const startOf = (f) => { for (const [d, p] of plans) if (p.nf === f && p.k === 1) return d; return ''; };
+  return { t, list, rows, rests, conf, names, byDate, real, plans, past, status, startOf, need, reacted,
+    eaten:(f) => cnt(real, f, tomorrow), firstOf:(f) => firstOf(real, f), lastOf:(f) => lastBy(real, f, t), skip, known,
+    triedNow:() => Array.from(new Set(conf.known.concat(Array.from(real.keys())))).filter((f) => status(f) === 'tried') };
 }
-// 이유식 일차: 오늘은 오늘 전까지 기록이 있는 날짜 수 + 1, 앞날은 오늘 일차 + 며칠 뒤, 지난 날은 그날까지 기록이 있는 날짜 수(기록이 없는 날은 없음)
+
+/* 이유식 일차(1.10.0): 오늘은 오늘 전까지 기록이 있는 날짜 수 + 1, 앞날은 오늘 일차 + 며칠 뒤, 지난 날은 그날까지 기록이 있는 날짜 수 */
+// 이유식 기록이 있는 날짜: 식단 계산과 같은 기록(foodRecs) + foodLog를 모르는 연결 코드면 foodDays. 바뀔 때만 다시 셈
+let foodDayMemo = { key:'', set:null, sorted:[] };
+function foodDaySet() {
+  const key = `${foodSig}|${foodLogOk}|${foodLog.length}|${JSON.stringify(foodRange)}|${outbox.length}|${foodDaysSrv.length}|${Object.values(records).filter((r) => r.type === '이유식').map((r) => r.id + r.date).join()}`;
+  if (foodDayMemo.key !== key) {
+    const s = new Set(foodRecs().map((r) => r.date));
+    if (foodLogOk !== 'yes') foodDaysSrv.forEach((d) => s.add(d));
+    foodDayMemo = { key, set:s, sorted:Array.from(s).sort() };
+  }
+  return foodDayMemo.set;
+}
+const countBefore = (arr, d, incl) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (incl ? arr[m] <= d : arr[m] < d) lo = m + 1; else hi = m; } return lo; };
 function mealN(d, adj) {
-  const t = todayStr(), s = foodDaySet(), all = Array.from(s);
+  const t = todayStr(), s = foodDaySet(), all = foodDayMemo.sorted;
   const a = adj == null ? mealConf().dayAdj : adj;
   let n;
-  if (d >= t) n = all.filter((x) => x < t).length + 1 + daysBetween(t, d);
-  else { if (!s.has(d)) return null; n = all.filter((x) => x <= d).length; }
+  if (d >= t) n = countBefore(all, t, false) + 1 + daysBetween(t, d);
+  else { if (!s.has(d)) return null; n = countBefore(all, d, true); }
   return Math.max(1, n + a);
 }
-// 권장량(참고): 초기 1주 5~15g, 2주부터 min(10k,60)~min(15k,80)g 하루 1번. 중기 min(10k,70)~min(15k,100)g 하루 2번과 간식 1번. 후기는 하루 3번만
-function mealAmount(d) {
-  const st = mealStage(d), n = mealN(d);
-  const k = n == null ? null : Math.ceil(n / 7);
-  let range = null, times;
-  if (st.stage === '초기') { times = '하루 1번'; if (k) range = k === 1 ? [5, 15] : [Math.min(10 * k, 60), Math.min(15 * k, 80)]; }
-  else if (st.stage === '중기') { times = '하루 2번과 간식 1번'; if (k) range = [Math.min(10 * k, 70), Math.min(15 * k, 100)]; }
-  else times = '하루 3번';
-  const text = st.stage === '후기' ? `${times} (참고), 후기 양은 아직 안 넣었어요` : range ? `권장 한 번 ${range[0]}~${range[1]}g, ${times} (참고)` : `${times} (참고)`;
-  return Object.assign({ n, k, range, times, text }, st);
+/* 권장 한 번 양(참고, 근거 1~3, 11): 1주 5~15g. 2주부터 지난 주차 한 번 평균 A에 10~15g(그런 날이 2일 미만이면 1.10.0 식).
+   단계별 최대 초기 80, 중기 100, 후기 120. 앞 주차는 이번 주 값에 1주마다 10g, 15g을 더해 미리 봄 */
+function mealAmt(d, eng) {
+  const N = mealN(d);
+  if (N == null) return null;
+  const st = mealStage(d), stage = st.stage, max = STAGE_MAX[stage];
+  const wk = Math.ceil(N / 7), t = todayStr();
+  const formula = (k, sg) => (sg === '초기' ? [Math.min(10 * k, 60), Math.min(15 * k, 80)] : sg === '중기' ? [Math.min(10 * k, 70), Math.min(15 * k, 100)] : [Math.min(10 * k, 100), Math.min(15 * k, 120)]);
+  const weekRange = (k, sg) => {
+    if (k <= 1) return [5, 15, ''];
+    const once = [];
+    Array.from(foodDaySet()).forEach((x) => {
+      if (x >= t) return;
+      const nx = mealN(x);
+      if (nx == null || Math.ceil(nx / 7) !== k - 1) return;
+      const day = eng && eng.byDate.get(x);
+      if (!day) return;
+      const v = mealStage(x).stage === '초기' ? day.g : Math.max(0, ...day.meals.map((m) => m.g));
+      if (v > 0) once.push(v);
+    });
+    if (once.length >= 2) { const A = Math.round(once.reduce((s, v) => s + v, 0) / once.length); return [A + 10, A + 15, `지난주 한 번 평균 ${A}g에서 10~15g 늘렸어요`]; }
+    const f = formula(k, sg);
+    return [f[0], f[1], '먹은 양(g)을 기록하면 실제 먹은 양에 맞춰 정해요'];
+  };
+  let lo, hi, note, future = false;
+  const kt = Math.ceil(mealN(t) / 7);
+  if (d > t && wk > kt) {
+    const b = weekRange(kt, mealStage(t).stage);
+    lo = b[0] + (wk - kt) * 10; hi = b[1] + (wk - kt) * 15; note = ''; future = true;
+  } else [lo, hi, note] = weekRange(wk, stage);
+  lo = Math.min(lo, max); hi = Math.min(hi, max);
+  const rt = lo === hi ? `${lo}g쯤` : `${lo}~${hi}g`;
+  return { N, k:wk, stage, lo, hi, note, future, max, midNew:st.midNew, noBirth:st.noBirth, times:STAGE_TIMES[stage], text:`권장 한 번 ${rt}, ${STAGE_TIMES[stage]} (참고)`, range:rt };
 }
+// 끼마다 권장: 중기로 넘어간 첫 7일은 둘째 끼부터 절반쯤
+const mealTop = (a, mi) => (a.midNew && mi >= 1 ? [Math.round(a.lo / 2), Math.round(a.hi / 2)] : [a.lo, a.hi]);
+/* 재료별 양(한 끼, 익힌 무게): 권장 위 값을 곡류, 채소(과일 포함), 단백질 비율로. 없는 묶음 몫은 곡류에. 새 재료 첫날은 '1숟가락부터' */
+function splitMeal(foods, top, stage, firstNew) {
+  const r = STAGE_RATIO[stage], gs = { grain:[], veg:[], protein:[] };
+  foods.forEach((f) => { const g = foodGroup(f); gs[g === 'fruit' ? 'veg' : g].push(f); });
+  const share = { grain:top * r[0] / 10, veg:top * r[1] / 10, protein:top * r[2] / 10 };
+  ['veg', 'protein'].forEach((k) => { if (!gs[k].length) { share.grain += share[k]; share[k] = 0; } });
+  if (!gs.grain.length) { const to = gs.veg.length ? 'veg' : 'protein'; share[to] += share.grain; share.grain = 0; }
+  return foods.map((f) => {
+    const g0 = foodGroup(f), k = g0 === 'fruit' ? 'veg' : g0;
+    const g = gs[k].length ? share[k] / gs[k].length : 0;
+    const label = f === '쌀' ? RICE_NAME[stage] : f;
+    const text = f === firstNew ? '1숟가락부터' : Math.round(g) < 1 ? '조금' : `${Math.round(g)}g`;
+    return { f, label, g, text };
+  });
+}
+const splitText = (items) => items.map((x) => `${x.label} ${x.text}`).join(', ');
 function eatenOn(d) {
   const list = recordsOn(d).filter((r) => r.type === '이유식');
   return { n:list.length, g:list.reduce((a, r) => a + (Number(r.amount) || 0), 0), list };
 }
 const eatenText = (e) => (e.g ? `먹은 양 ${e.g}g` : e.n ? `먹은 양 ${e.n}번` : '아직 안 먹었어요');
-// 그날 식단 정보. 식단이 없으면 null
-function mealInfo(d, list0) {
-  const list = list0 || mealList();
-  if (!list.length) return null;
-  const conf = mealConf();
-  const step = list.find((m) => m.date <= d && d <= mealEnd(m)) || null;
-  const tried = triedFoods(d, list, conf);
-  const base = conf.base.filter((f) => tried.includes(f));
-  let kind, reason = '';
-  const next = list.find((m) => m.date > d && m.kind === '새 재료') || null;
-  if (step) kind = step.kind === '쉼' ? 'rest' : 'new';
-  else if (d > mealEnd(list[list.length - 1])) kind = 'done';
-  else if (d < list[0].date) kind = 'before';
-  else {
-    kind = 'skip';
-    const nx = list.find((m) => m.date > d);
-    if (vaccineDays().has(d)) reason = '접종 날이라 새 재료 쉼';
-    else if (nx && nx.kind === '새 재료' && isAllergyFood(nx.food) && isWeekend(d)) reason = `주말이라 ${nx.food}${eunNeun(nx.food)} 월요일부터`;
-  }
-  const reacted = !!(step && step.result === '반응');
-  const food = kind === 'new' ? step.food : '';
-  const foods = base.concat(food && !reacted && !base.includes(food) ? [food] : []);
-  const st = mealStage(d);
-  return { d, kind, step, food, k:step ? daysBetween(step.date, d) + 1 : 0, days:step ? step.days : 0, reacted, reason, next, tried, base, foods,
-    menu:mealMenu(foods, st.stage), stage:st.stage };
+const ateText = (day) => {   // '미음, 소고기, 애호박 40g'
+  const chips = [];
+  day.recs.forEach((r) => recChips(r.name).forEach((c) => { if (!chips.includes(c)) chips.push(c); }));
+  return `${chips.join(', ') || '이유식'}${day.g ? ` ${day.g}g` : ''}`;
+};
+// 새 재료 줄: '애호박 새 재료 2일째 (3일 중)', 오늘 첫날이면 '오늘부터 애호박, 1숟가락부터', 아니면 먹던 것만과 이유
+function planStep(p, todayCard) {
+  if (p.nf) return p.k === 1 && todayCard ? `오늘부터 ${p.nf}, 1숟가락부터` : `${p.nf} 새 재료 ${p.k}일째 (${p.n}일 중)`;
+  return `새 재료 없이 먹던 것만${p.reason ? `, ${p.reason}` : ''}`;
 }
-const mealStepText = (x) => (x.kind === 'new' ? `${x.food} 새 재료 ${x.k}일째 (${x.days}일 중)${x.reacted ? ', 반응 있었어요' : ''}`
-  : x.kind === 'done' ? '식단이 끝났어요. 다음 재료를 넣어 주세요'
-  : `새 재료 없이 먹던 것만${x.reason ? `, ${x.reason}` : ''}`);
 function weightLine() {
   const w = latestOf('체중');
   return w && hasAmount(w) ? `최근 체중 ${fmt(w.amount, 2)}kg (${md(w.date)})` : '';
 }
+function stageLine() {
+  const mo = monthsAt(todayStr());
+  if (mo == null) return '설정에 생일을 넣으면 단계와 횟수가 맞게 나와요';
+  const st = mealStage(todayStr()).stage;
+  const nx = st === '초기' ? `${md(monthDate(7))}부터 중기(하루 2번)` : st === '중기' ? `${md(monthDate(9))}부터 후기(하루 3번)` : '';
+  return `생후 ${mo}개월, ${st}예요.${nx ? ` ${nx}` : ''}`;
+}
 const MEAL_CHECK = '먹는 만큼만 주고, 양은 영유아검진 때 소아과와 맞춰요';
-const mealOldNote = () => (connected() && mealSupport === 'no' ? '<p class="ev-note">연결 코드를 새 버전으로 바꾸면 식단이 가족과 같이 보여요. 지금은 이 폰에만 있어요.</p>' : '');
-const mealBadNote = (list) => { const bad = reactedFoods(list); return bad.length ? `<p class="meal-bad">반응 있었던 재료: ${esc(bad.join(', '))}</p>` : ''; };
+const mealOldNote = () => (!connected() ? '' : mealSupport === 'no' ? '<p class="ev-note">연결 코드를 새 버전으로 바꾸면 식단이 가족과 같이 보여요. 지금은 이 폰에만 있어요.</p>'
+  : foodLogOk === 'no' ? '<p class="ev-note">연결 코드를 새 버전으로 바꾸면 지난 이유식 기록까지 보고 식단을 맞춰요</p>' : '');
+const mealBadNote = (eng) => { const bad = eng.rows.filter((r) => r.result === '반응').map((r) => r.food); return bad.length ? `<p class="meal-bad">반응 있었던 재료: ${esc(Array.from(new Set(bad)).join(', '))}</p>` : ''; };
+// 3일치 준비할 양: 다음 끼부터 3일 동안 재료별로 더해 5g 단위로 올림
+function prepLine(eng) {
+  const t = eng.t, p0 = eng.plans.get(t);
+  const start = p0.meals.some((m) => !m.eaten) ? t : addDays(t, 1);
+  const sum = new Map();
+  for (let i = 0; i < 3; i++) {
+    const d = addDays(start, i), p = eng.plans.get(d), a = mealAmt(d, eng);
+    if (!p || !a) continue;
+    p.meals.forEach((m, mi) => {
+      if (m.eaten) return;
+      splitMeal(m.foods, mealTop(a, mi)[1], p.stage, '').forEach((x) => sum.set(x.label, (sum.get(x.label) || 0) + x.g));
+    });
+  }
+  const items = Array.from(sum).map(([l, g]) => `${l} ${Math.max(5, Math.ceil(g / 5) * 5)}g`);
+  const nexts = [];
+  for (const [d, p] of eng.plans) {
+    if (d < start || !p.nf || p.k !== 1 || p.fromRec) continue;
+    nexts.push(`${p.nf} ${evDayShort2(d)}`);
+    if (nexts.length >= 2) break;
+  }
+  const ds = (x) => `${parseD(x).getDate()}일`;
+  return `<div class="meal-prep"><p>${ds(start)} ~ ${ds(addDays(start, 2))} 준비(넉넉히): ${esc(items.join(', ') || '없음')}</p>${nexts.length ? `<p>다음 새 재료: ${esc(nexts.join(', '))}</p>` : ''}<small>한 번에 많이 만들면 한 끼씩 얼려 1주일 안에 써요</small></div>`;
+}
+/* 반응이었나요: 어제나 오늘 새 재료를 먹었고 그날이나 다음 날(오늘까지) 증상 기록에 토, 발진, 설사가 있을 때. 가장 최근 하나 */
+const REACT_SYM = ['토', '발진', '설사'];
+function reactAsk(eng) {
+  const t = eng.t, no = store.get('mealNotReact', []);
+  let best = null;
+  [addDays(t, -1), t].forEach((d) => {
+    const ps = eng.past(d);
+    if (!ps) return;
+    ps.newFoods.filter((x) => !x.bad).forEach((x) => {
+      Object.values(records).filter((r) => r.type === '증상' && r.date >= d && r.date <= (d === t ? t : addDays(d, 1)) && recChips(r.name).some((c) => REACT_SYM.includes(c)))
+        .forEach((r) => {
+          if (no.includes(`${r.id}|${x.f}`)) return;
+          if (!best || keyOf(r) > keyOf(best.rec) || (keyOf(r) === keyOf(best.rec) && d > best.d)) best = { food:x.f, rec:r, d };
+        });
+    });
+  });
+  return best;
+}
+function setReact(eng, food, on) {
+  const row = eng.rows.find((r) => r.food === food);
+  if (row) { commitMeals([Object.assign({}, row, { result:on ? '반응' : '' })], []); return; }
+  if (on) commitMeals([{ id:newId(), date:eng.firstOf(food) || todayStr(), days:MEAL_DAYS, food, kind:'새 재료', result:'반응', memo:'', createdAt:'', updatedAt:'' }], []);
+}
+// 이날 새 재료 쉬기: 그 날짜만 '쉼' 줄을 넣거나 빼고, 여러 날짜 '쉼' 줄은 그날만 빠지게 줄이거나 나눔
+function toggleRest(d) {
+  const r = mealList().find((m) => m.kind === '쉼' && m.date <= d && d <= mealEnd(m));
+  if (!r) { commitMeals([{ id:newId(), date:d, days:1, food:'', kind:'쉼', result:'', memo:'', createdAt:'', updatedAt:'' }], []); return true; }
+  const end = mealEnd(r);
+  if (r.days === 1) commitMeals([], [r.id]);
+  else if (d === r.date) commitMeals([Object.assign({}, r, { date:addDays(d, 1), days:r.days - 1 })], []);
+  else if (d === end) commitMeals([Object.assign({}, r, { days:r.days - 1 })], []);
+  else commitMeals([Object.assign({}, r, { days:daysBetween(r.date, d) }), { id:newId(), date:addDays(d, 1), days:daysBetween(d, end), food:'', kind:'쉼', result:'', memo:'', createdAt:'', updatedAt:'' }], []);
+  return false;
+}
+const restOn = (d) => mealList().some((m) => m.kind === '쉼' && m.date <= d && d <= mealEnd(m));
+// 저장할 때 줄 날짜: 아직 안 먹인 재료는 계산한 예상 시작일, 먹기 시작한 재료는 처음 먹은 날(시트를 날짜 순으로 보면 식단 순서와 같게)
+function rowDates(rows, eng) {
+  return rows.map((r) => {
+    if (r.kind !== '새 재료') return r;
+    const first = eng.firstOf(r.food), est = eng.startOf(r.food);
+    return Object.assign({}, r, { date:first || est || r.date || addDays(eng.t, MEAL_AHEAD) });
+  });
+}
 
-if (PREVIEW) {   // 미리보기에만 예시 식단(오늘 기준): 매일 쌀, 소고기, 애호박(어제부터 3일), 청경채, 달걀, 밀가루. 시트로는 안 보냄
-  mealCfg = { base:['쌀', '소고기'], known:['쌀', '소고기'], dayAdj:0 };
-  const y = addDays(todayStr(), -1);
-  layoutMeals(['애호박', '청경채', '달걀', '밀가루'].map((food, i) => ({ id:`demoMeal${i + 1}x`, date:i ? '' : y, days:MEAL_DAYS, food, kind:'새 재료', result:'', memo:'', createdAt:'', updatedAt:'' })))
-    .forEach((m) => { meals[m.id] = normMeal(m); });
+if (PREVIEW) {   // 미리보기에만 예시 식단: 매일 쌀, 소고기, 그다음 애호박, 청경채, 달걀, 밀가루(예시 이유식 기록은 미리보기 만들 때 넣음). 시트로는 안 보냄
+  mealCfg = { base:['쌀', '소고기'], known:['쌀', '소고기'], dayAdj:0, skip:[] };
+  const t = todayStr();
+  ['애호박', '청경채', '달걀', '밀가루'].forEach((food, i) => { const id = `demoMeal${i + 1}x`; meals[id] = normMeal({ id, date:addDays(t, i * 3 - 2), days:MEAL_DAYS, food, kind:'새 재료', result:'', memo:'', createdAt:'', updatedAt:'' }); });
 }
 
 /* 오늘 화면 '이유식' 칸: 오늘을 볼 때만, 일정 칸 아래 사진 위 */
@@ -3447,33 +3742,52 @@ function renderMeal() {
   if (!sec) return;
   const t = todayStr();
   if (view !== t) { sec.hidden = true; sec.innerHTML = ''; return; }
-  relayMeals();
-  const list = mealList();
-  if (!list.length) {
+  if (!mealList().length) {
     const recent = Array.from(foodDaySet()).some((x) => x >= addDays(t, -13) && x <= t);
     sec.hidden = !recent;
     sec.innerHTML = recent ? `<button class="ev-empty meal-make" type="button" data-act="edit">${icon('plus')}<span>이유식 식단 만들기</span></button>` : '';
     return;
   }
   sec.hidden = false;
-  const x = mealInfo(t, list), a = mealAmount(t), e = eatenOn(t);
-  let extra = '';
-  const nx = x.next;
-  if (nx && (nx.date === addDays(t, 1) || nx.date === addDays(t, 2))) {
-    const when = nx.date === addDays(t, 1) ? '내일' : '모레';
-    const tail = isAllergyFood(nx.food) ? '평일 오전에 아주 조금부터' : when === '내일' ? '오늘 재료를 준비해요' : '내일 재료를 준비해요';
-    extra += `<p class="meal-next">${when}부터 ${esc(nx.food)}, ${tail}</p>`;
+  const eng = mealEngine(), p = eng.plans.get(t), a = mealAmt(t, eng);
+  const tm = addDays(t, 1), pt = eng.plans.get(tm);
+  let main = '';
+  if (!p.recMeals.length) {   // 오늘 첫 끼 전
+    const m = p.meals[0];
+    main = `<span class="meal-small">오늘 첫 끼</span><span class="meal-menu">${esc(mealMenu(m.foods, p.stage))}</span>
+      <span class="meal-step">${esc(planStep(p, true))}</span>
+      <span class="meal-amt">${esc(a.text)}${a.note ? `<small>${esc(a.note)}</small>` : ''}</span>
+      <span class="meal-parts">${esc(splitText(splitMeal(m.foods, mealTop(a, 0)[1], p.stage, p.k === 1 ? p.nf : '')))}<small>익힌 재료 무게예요</small></span>`;
+  } else if (!p.done) {   // 첫 끼를 먹었고 끼가 남음(중기부터)
+    const mi = p.recMeals.length, m = p.meals[mi], top = mealTop(a, mi);
+    main = `<span class="meal-small">오늘 먹은 것: ${esc(ateText(eng.byDate.get(t)))}</span><span class="meal-menu">다음 끼: ${esc(mealMenu(m.foods, p.stage))}</span>
+      <span class="meal-step">${esc(planStep(p))}</span>
+      <span class="meal-amt">권장 한 번 ${top[0] === top[1] ? `${top[0]}g쯤` : `${top[0]}~${top[1]}g`}${a.midNew && mi >= 1 ? ', 첫 끼의 절반쯤부터' : ''} (참고)</span>
+      <span class="meal-parts">${esc(splitText(splitMeal(m.foods, top[1], p.stage, '')))}<small>익힌 재료 무게예요</small></span>`;
+  } else {   // 오늘 끼를 다 먹음
+    const at = mealAmt(tm, eng);
+    main = `<span class="meal-small">오늘 먹은 것: ${esc(ateText(eng.byDate.get(t)))}</span><span class="meal-menu">내일: ${esc(mealMenu(pt.meals[0].foods, pt.stage))}${pt.nf ? `, ${esc(pt.nf)} ${pt.k}일째` : ''}</span>
+      <span class="meal-amt">${esc(at.text)}</span>`;
   }
-  // 발열 중이고 오늘이나 내일 새 재료가 시작하면 미루기 권유
-  const soon = [t, addDays(t, 1)].find((d) => list.some((m) => m.kind === '새 재료' && m.date === d));
-  if (activeFever() && soon) extra += `<div class="meal-fever"><span>열이 있을 땐 새 재료를 미루는 게 좋아요</span><button class="chip" type="button" data-act="postpone" data-d="${soon}">하루 미루기</button></div>`;
-  if (x.kind === 'done') extra += `<div class="meal-fever meal-done"><span>식단이 끝났어요. 다음 재료를 넣어 주세요</span><button class="chip" type="button" data-act="edit">식단 고치기</button></div>`;
-  sec.innerHTML = `<div class="pics-head"><h2>이유식${a.n ? ` <small>${a.n}일째</small>` : ''}</h2><button class="link-btn" type="button" data-act="cal">식단표${icon('right')}</button></div>
-    <div class="meal-card"><button class="meal-open" type="button" data-act="day">
-      <span class="meal-menu">${esc(x.menu)}</span>
-      ${x.kind === 'done' ? '' : `<span class="meal-step">${esc(mealStepText(x))}</span>`}
-      <span class="meal-amt"><span>${esc(a.text)}</span> <b>${esc(eatenText(e))}</b></span>
-    </button>${extra}</div>`;
+  let extra = '';
+  if (p.snack && !p.done) extra += `<p class="meal-snack">간식: ${esc(p.snack)}</p>`;
+  // 다음 새 재료가 내일이나 모레 시작하면 준비 안내('내일:' 줄과 겹치면 모레 것만)
+  const nx = [tm, addDays(t, 2)].map((d) => ({ d, p:eng.plans.get(d) })).find((x) => x.p.nf && x.p.k === 1 && !(p.done && x.d === tm));
+  if (nx) {
+    const when = nx.d === tm ? '내일' : '모레';
+    const tail = isAllergyFood(nx.p.nf) ? '평일 오전에 아주 조금부터' : when === '내일' ? '오늘 재료를 준비해요' : '내일 재료를 준비해요';
+    extra += `<p class="meal-next">${when}부터 ${esc(nx.p.nf)}, ${tail}</p>`;
+  }
+  if (p.none && !p.nf) extra += `<div class="meal-fever meal-done"><span>새로 먹일 재료를 다 먹어 봤어요. 식단에 재료를 넣으면 이어서 짜요</span><button class="chip" type="button" data-act="edit">식단 고치기</button></div>`;
+  const ask = reactAsk(eng);
+  if (ask) {
+    const at = ampm(ask.rec.time), syms = recChips(ask.rec.name).filter((c) => REACT_SYM.includes(c)).join(', ');
+    extra += `<div class="meal-ask"><p>증상 기록이 있어요: ${esc(syms)} (${esc(dayWord(ask.rec.date) || md(ask.rec.date))} ${at.ap} ${at.hm}). ${esc(ask.food)} 반응이었나요?</p>
+      <div class="row"><button class="chip" type="button" data-act="react" data-f="${esc(ask.food)}">반응이었어요</button><button class="chip" type="button" data-act="notreact" data-f="${esc(ask.food)}" data-rid="${esc(ask.rec.id)}">아니에요</button></div>
+      <small>반응이면 그 재료는 멈추고 소아과에 물어봐요</small></div>`;
+  }
+  sec.innerHTML = `<div class="pics-head"><h2>이유식${a.N ? ` <small>${a.N}일째</small>` : ''}</h2><button class="link-btn" type="button" data-act="cal">식단표${icon('right')}</button></div>
+    <div class="meal-card"><button class="meal-open" type="button" data-act="day">${main}</button>${extra}</div>`;
 }
 
 /* 그날 이유식 창: 달력에서 누르면 달력 위로 겹쳐 엶(그날 일정 창과 같은 뒤로가기 규칙) */
@@ -3482,44 +3796,53 @@ function openMealDay(d, backCal, reuse) {
   const t = todayStr();
   const body = h('div', { class:'mealday' });
   const paint = () => {
-    const list = mealList(), x = mealInfo(d, list), a = mealAmount(d), e = eatenOn(d);
-    let html = a.n ? `<p class="md-n">이유식 ${a.n}일째</p>` : '';
-    if (!x || x.kind === 'before') html += '<p class="evday-empty">이날은 식단이 없어요</p>';
-    if (x && x.kind !== 'before') {
-      const chips = x.base.map((f) => `<span class="mchip">${esc(f)} <small>매일</small></span>`);
-      if (x.kind === 'new') chips.push(`<span class="mchip new${x.reacted ? ' bad' : ''}">${esc(x.food)} <small>새 재료 ${x.k}/${x.days}일째</small></span>`);
-      html += `<p class="md-menu">${esc(x.menu)}</p><p class="md-step">${esc(mealStepText(x))}</p><div class="mchips">${chips.join('')}</div>`;
-      if (x.kind !== 'new') {
-        const mix = x.tried.filter((f) => !x.base.includes(f));
-        if (mix.length) html += `<p class="md-line">먹어 본 재료 중 한두 가지 섞어도 돼요</p><div class="mchips">${mix.map((f) => `<span class="mchip soft">${esc(f)}</span>`).join('')}</div>`;
-      }
-      if (x.kind === 'new' && x.k === 1) html += `<p class="md-guide">${isAllergyFood(x.food) ? '평일 오전에 아주 조금부터 줘요. 두드러기, 입 주변 발진, 입술이나 얼굴이 붓는지, 계속 토하는지 살펴요. 숨쉬기 힘들어하면 바로 응급실로 가요' : '첫날은 오전에 한두 숟가락부터 주고 하루 동안 살펴요'}</p>`;
-      if (x.reacted) html += '<p class="meal-bad">반응이 있으면 그 재료는 멈추고 소아과에 물어봐요</p>';
-    }
-    const lines = [a.text, `농도 ${STAGE_THICK[a.stage]}`];
-    if (a.midNew) lines.push('두 번째는 첫 번째의 절반쯤부터');
-    if (a.noBirth) lines.push('설정에 생일을 넣으면 단계와 횟수가 맞게 나와요');
-    lines.push(eatenText(e));
+    const eng = mealEngine(), a = mealAmt(d, eng);
+    const p = d >= t ? eng.plans.get(d) : null, ps = eng.past(d);
+    let html = a ? `<p class="md-n">이유식 ${a.N}일째</p>` : '';
+    if (p && p.st.midFirst) html += '<p class="md-guide">오늘부터 중기예요. 하루 2번, 둘째 끼는 절반쯤부터</p>';
+    if (p) {
+      html += `<p class="md-step">${esc(planStep(p))}</p>`;
+      p.meals.forEach((m, mi) => {
+        const nth = MEAL_NTH[mi] || `${mi + 1}번째 끼`;
+        if (m.eaten) { html += `<div class="md-meal eaten"><p class="md-h">${nth} 먹었어요</p><p class="md-line">${esc(ateText({ recs:m.recs, g:m.g }))}</p></div>`; return; }
+        const top = mealTop(a, mi);
+        const chips = m.foods.map((f) => (p.newFoods.includes(f) && mi === 0 ? `<span class="mchip new">${esc(f)} <small>새 재료 ${p.k}/${p.n}일째</small></span>`
+          : f === m.mix ? `<span class="mchip soft">${esc(f)} <small>섞기</small></span>` : `<span class="mchip">${esc(f)} <small>매일</small></span>`));
+        html += `<div class="md-meal"><p class="md-h">${nth}</p><p class="md-menu">${esc(mealMenu(m.foods, p.stage))}</p><div class="mchips">${chips.join('')}</div>
+          <p class="md-line">${esc(splitText(splitMeal(m.foods, top[1], p.stage, mi === 0 && p.k === 1 ? p.nf : '')))} <small>익힌 재료 무게예요</small></p>
+          ${mi >= 1 && a.midNew ? '<p class="md-line">첫 끼의 절반쯤부터</p>' : ''}</div>`;
+      });
+      if (p.snack) html += `<p class="md-line">간식: ${esc(p.snack)}</p>`;
+      if (p.nf && p.k === 1 && !p.fromRec) html += `<p class="md-guide">${isAllergyFood(p.nf) ? '평일 오전에 아주 조금부터 줘요. 두드러기, 입 주변 발진, 입술이나 얼굴이 붓는지, 계속 토하는지 살펴요. 숨쉬기 힘들어하면 바로 응급실로 가요' : '첫날은 오전에 한두 숟가락부터 주고 하루 동안 살펴요'}</p>`;
+    } else if (ps) {
+      if (ps.newFoods.length) html += `<p class="md-step">${esc(ps.newFoods.map((x) => `${x.f} 새 재료 ${x.k}일째${x.bad ? ', 반응 있었어요' : ''}`).join(', '))}</p>`;
+      else html += '<p class="md-step">새 재료 없이 먹던 것만</p>';
+    } else html += '<p class="evday-empty">이날은 이유식 기록이 없어요</p>';
+    const fx = p && p.nf ? p.nf : ps && ps.newFoods[0] ? ps.newFoods[0].f : '';
+    if (fx && eng.reacted(fx)) html += '<p class="meal-bad">반응이 있으면 그 재료는 멈추고 소아과에 물어봐요</p>';
+    const lines = [];
+    if (a && (p || d === t)) { lines.push(a.text); if (a.note) lines.push(a.note); }
+    lines.push(`농도 ${STAGE_THICK[(p || { stage:mealStage(d).stage }).stage]}`);
+    if (a && a.noBirth) lines.push('설정에 생일을 넣으면 단계와 횟수가 맞게 나와요');
+    lines.push(eatenText(eatenOn(d)));
     const wl = weightLine(); if (wl) lines.push(wl);
     html += `<ul class="lines md-lines">${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul><p class="md-small">${MEAL_CHECK}</p>`;
-    if (e.list.length) html += `<ul class="tl md-recs">${e.list.map((r) => `<li><button class="item" type="button" data-rid="${esc(r.id)}" style="--c:var(--food)"><time><small>${ampm(r.time).ap}</small><span class="num">${ampm(r.time).hm}</span></time><span class="ico">${icon('bowl')}</span><span><span class="what">${describe(r).html}</span></span><span></span></button></li>`).join('')}</ul>`;
+    const recs = eatenOn(d).list;
+    if (recs.length) html += `<ul class="tl md-recs">${recs.map((r) => `<li><button class="item" type="button" data-rid="${esc(r.id)}" style="--c:var(--food)"><time><small>${ampm(r.time).ap}</small><span class="num">${ampm(r.time).hm}</span></time><span class="ico">${icon('bowl')}</span><span><span class="what">${describe(r).html}</span></span><span></span></button></li>`).join('')}</ul>`;
     const acts = [];
-    if (d >= t && postponeList(list, d)) acts.push('<button class="chip" type="button" data-act="postpone">이날부터 하루 미루기</button>');
-    if (x && x.kind === 'new' && d <= t) acts.push(`<button class="chip" type="button" data-act="react" aria-pressed="${x.reacted}">반응 있었어요</button>`);
+    if (d >= t) acts.push(`<button class="chip" type="button" data-act="rest" aria-pressed="${restOn(d)}">이날 새 재료 쉬기</button>`);
+    const ate = d <= t && ps && ps.newFoods.length ? ps.newFoods[0].f : '';
+    if (ate) acts.push(`<button class="chip" type="button" data-act="react" data-f="${esc(ate)}" aria-pressed="${eng.reacted(ate)}">반응 있었어요</button>`);
     if (acts.length) html += `<div class="row md-acts">${acts.join('')}</div>`;
     body.innerHTML = html;
   };
+  const refresh = () => { paint(); if (underSheet && underSheet.box._repaint) underSheet.box._repaint(); };
   body.addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
     if (!b) return;
     if (b.dataset.rid) { const r = records[b.dataset.rid]; if (r) openRecord(r.type, r, { back:again }); return; }
-    if (b.dataset.act === 'postpone') { if (postponeFrom(d)) toast('하루 미뤘어요'); paint(); if (underSheet && underSheet.box._repaint) underSheet.box._repaint(); }
-    else if (b.dataset.act === 'react') {
-      const x = mealInfo(d);
-      if (!x || !x.step) return;
-      commitMeals([Object.assign({}, x.step, { result:x.reacted ? '' : '반응' })], []);
-      paint(); if (underSheet && underSheet.box._repaint) underSheet.box._repaint();
-    }
+    if (b.dataset.act === 'rest') { toast(toggleRest(d) ? '이날은 새 재료를 쉬어요' : '이날 쉬기를 풀었어요'); refresh(); }
+    else if (b.dataset.act === 'react') { const eng = mealEngine(); setReact(eng, b.dataset.f, !eng.reacted(b.dataset.f)); refresh(); }
   });
   paint();
   const foot = h('footer', { class:'sheet-foot' });
@@ -3540,71 +3863,86 @@ function openMealEdit(back) {
   let draft = mealList().map((m) => Object.assign({}, m));
   const removed = [];
   const conf0 = mealConf();
-  const c = { base:conf0.base.slice(), known:conf0.known.slice(), dayAdj:conf0.dayAdj };
-  let start = addDays(t, 1);
+  const c = { base:conf0.base.slice(), known:conf0.known.slice(), dayAdj:conf0.dayAdj, skip:conf0.skip.slice() };
   if (first) {
     c.known = [foodList.includes('미음') ? '쌀' : '', foodList.includes('소고기') ? '소고기' : ''].filter(Boolean);
     c.base = MEAL_BASE.filter((f) => c.known.includes(f));
-    draft = MEAL_ORDER.filter((f) => !c.known.includes(f)).map((food) => ({ id:newId(), date:'', days:MEAL_DAYS, food, kind:'새 재료', result:'', memo:'', createdAt:'', updatedAt:'' }));
-  } else {
-    const free = draft.filter((m) => m.date > t);
-    if (free.length && free.length === draft.length) start = free[0].date;
+    draft = MEAL_ORDER.filter((f) => !c.known.includes(f)).map((food, i) => ({ id:newId(), date:addDays(t, 1 + i), days:MEAL_DAYS, food, kind:'새 재료', result:'', memo:'', createdAt:`${i}`, updatedAt:'' }));
   }
-  const laid = () => layoutMeals(draft, draft.some((m) => m.date && m.date <= t) ? null : start);
   const body = h('div', { class:'mealedit' });
   const err = h('p', { class:'err', role:'alert' });
-  let addOpen = false, armed = '';
+  let addOpen = false, armed = '', pickAuto = '';
+  let eng = null;
+  const ordered = () => draft.filter((m) => m.kind === '새 재료').sort(mealCmp);
   const paint = () => {
-    draft = laid();
-    const started = draft.some((m) => m.date <= t);
-    const tried = triedFoods(t, draft, c);
+    eng = mealEngine(draft, c);
     const n = mealN(t, c.dayAdj);
-    const range = (m) => `${evDayShort2(m.date)}${m.days > 1 ? ` ~ ${evDayShort2(mealEnd(m))}` : ''}`;
-    const vac = vaccineDays();
-    let rows = '';
-    draft.forEach((m, i) => {
-      const prev = draft[i - 1];
-      if (prev) {   // 비켜 간 날
-        for (let d = addDays(mealEnd(prev), 1); d < m.date; d = addDays(d, 1)) {
-          const why = vac.has(d) ? '접종 날이라 새 재료 쉼' : m.kind === '새 재료' && isAllergyFood(m.food) && isWeekend(d) ? `주말이라 ${m.food}${eunNeun(m.food)} 월요일부터` : '';
-          rows += `<li class="mgap">${esc(evDayShort2(d))} 먹던 것만${why ? `, ${esc(why)}` : ''}</li>`;
-        }
+    const triedAll = eng.triedNow();
+    const rows = ordered();
+    const yet = rows.filter((m) => eng.status(m.food) === 'yet');
+    let list = '';
+    rows.forEach((m) => {
+      const s = eng.status(m.food), i = draft.indexOf(m), done = eng.eaten(m.food);
+      const ate = (eng.real.get(m.food) || []);
+      let state = '', acts = '';
+      if (s === 'bad') state = '<small class="bad">반응 있었어요</small>';
+      else if (s === 'tried') state = `<small>다 먹어 봤어요${ate.length ? ` (${esc(evDayShort2(ate[0]).replace(/ \(.\)/, ''))} ~ ${esc(evDayShort2(ate[Math.min(ate.length, m.days) - 1]).replace(/ \(.\)/, ''))})` : ''}</small>`;
+      else if (s === 'eating') state = `<small class="now">먹는 중 ${done}/${m.days}일</small>`;
+      else { const st = eng.startOf(m.food); state = `<small>${st ? `${esc(evDayShort2(st))}부터` : '나중에'}</small>`; }
+      if (s === 'eating' || s === 'yet') acts += `<span class="stepper sm"><button class="chip" type="button" data-act="minus" data-i="${i}" aria-label="하루 줄이기"${m.days <= Math.max(1, done) ? ' disabled' : ''}>−</button><b>${m.days}일</b><button class="chip" type="button" data-act="plus" data-i="${i}" aria-label="하루 늘리기"${m.days >= 7 ? ' disabled' : ''}>+</button></span>`;
+      if (s === 'yet') {
+        const yi = yet.indexOf(m);
+        acts += `<button class="chip" type="button" data-act="up" data-i="${i}" aria-label="위로"${yi <= 0 ? ' disabled' : ''}>${icon('up')}</button><button class="chip down" type="button" data-act="down" data-i="${i}" aria-label="아래로"${yi >= yet.length - 1 ? ' disabled' : ''}>${icon('up')}</button>`
+          + `<button class="chip mdel${armed === m.id ? ' armed' : ''}" type="button" data-act="del" data-i="${i}">${armed === m.id ? '한 번 더' : '빼기'}</button>`;
       }
-      const past = mealEnd(m) < t, now = m.date <= t && !past, free = m.date > t;
-      const name = m.kind === '쉼' ? '쉼 <small>먹던 것만</small>' : `${esc(m.food)}${isAllergyFood(m.food) ? ' <small class="warn">주의</small>' : ''}${m.result === '반응' ? ' <small class="bad">반응</small>' : ''}`;
-      const step = past ? '' : `<span class="stepper sm"><button class="chip" type="button" data-act="minus" data-i="${i}" aria-label="하루 줄이기"${m.days <= 1 ? ' disabled' : ''}>−</button><b>${m.days}일</b><button class="chip" type="button" data-act="plus" data-i="${i}" aria-label="하루 늘리기"${m.days >= 7 ? ' disabled' : ''}>+</button></span>`;
-      const firstFree = draft.findIndex((x) => x.date > t);
-      const moves = free && m.kind !== '쉼' ? `<button class="chip" type="button" data-act="up" data-i="${i}" aria-label="위로"${i <= firstFree ? ' disabled' : ''}>${icon('up')}</button><button class="chip down" type="button" data-act="down" data-i="${i}" aria-label="아래로"${i >= draft.length - 1 ? ' disabled' : ''}>${icon('up')}</button>` : '';
-      const del = free ? `<button class="chip mdel${armed === m.id ? ' armed' : ''}" type="button" data-act="del" data-i="${i}">${armed === m.id ? '한 번 더' : '빼기'}</button>` : '';
-      rows += `<li class="mrow${past ? ' past' : ''}${now ? ' now' : ''}"><div class="mrow-top"><span class="mrange">${esc(range(m))}</span><span class="mfood">${name}</span></div>${past ? '' : `<div class="mrow-acts">${step}${moves}${del}</div>`}</li>`;
+      list += `<li class="mrow${s === 'tried' ? ' past' : ''}${s === 'eating' ? ' now' : ''}" data-food="${esc(m.food)}"><div class="mrow-top"><span class="mfood">${esc(m.food)}${isAllergyFood(m.food) ? ' <small class="warn">주의</small>' : ''}</span>${state}</div>${acts ? `<div class="mrow-acts">${acts}</div>` : ''}</li>`;
     });
-    const quick = MEAL_ORDER.filter((f) => !draft.some((m) => m.food === f) && !c.known.includes(f)).concat(MEAL_MORE.filter((f) => !draft.some((m) => m.food === f) && !c.known.includes(f)));
-    body.innerHTML = `${mealOldNote()}${mealBadNote(draft)}
+    // 식단 밖에서 먹은 재료(기록에는 있고 줄은 없는 먹는 중 재료)
+    const outside = Array.from(eng.real.keys()).filter((f) => !rows.some((m) => m.food === f) && !c.skip.includes(f) && eng.status(f) === 'eating');
+    const outHtml = outside.map((f) => `<li class="mrow now" data-food="${esc(f)}"><div class="mrow-top"><span class="mfood">${esc(f)}</span><small class="now">먹는 중 ${eng.eaten(f)}/${MEAL_DAYS}일</small></div>
+      <div class="mrow-acts"><button class="chip" type="button" data-act="addrow" data-f="${esc(f)}">식단에 넣기</button><button class="chip" type="button" data-act="skip" data-f="${esc(f)}">추천에서 빼기</button></div></li>`).join('');
+    // 자동으로 이어질 재료(고를 순서대로 10개)
+    const curStage = mealStage(t).stage, nob = mealStage(t).noBirth;
+    const auto = [];
+    STAGES.forEach((s) => AUTO_FOODS[s].forEach((f) => {
+      if (auto.length >= 10 || rows.some((m) => m.food === f) || c.skip.includes(f) || c.known.includes(f) || eng.eaten(f) > 0 || auto.some((x) => x.f === f)) return;
+      if (nob && s !== '초기') return;
+      auto.push({ f, s });
+    }));
+    const autoHtml = auto.map((x) => `<button class="chip${pickAuto === x.f ? ' on' : ''}" type="button" data-act="auto" data-f="${esc(x.f)}" aria-pressed="${pickAuto === x.f}">${esc(x.f)}${STAGES.indexOf(x.s) > STAGES.indexOf(curStage) ? ` <small>${x.s}부터</small>` : ''}</button>`).join('');
+    const quick = MEAL_ORDER.concat(MEAL_MORE).filter((f) => !draft.some((m) => m.food === f) && !c.known.includes(f));
+    const rests = draft.filter((m) => m.kind === '쉼' && mealEnd(m) >= t);
+    body.innerHTML = `${mealOldNote()}${mealBadNote(eng)}
       <div class="field"><span class="field-label">오늘 이유식</span><div class="stepper"><button class="chip" type="button" data-act="adjm" aria-label="하루 빼기">−</button><b>${n}일째</b><button class="chip" type="button" data-act="adjp" aria-label="하루 더하기">+</button></div>
         <p class="hint">기록을 빼먹은 날이 있으면 맞춰 주세요. 가족 폰 모두 같이 바뀌어요.</p></div>
-      <div class="field"><span class="field-label">매일 넣는 재료</span><div class="chips">${tried.map((f) => `<button class="chip" type="button" data-act="base" data-f="${esc(f)}" aria-pressed="${c.base.includes(f)}">${esc(f)}</button>`).join('') || '<span class="hint">먹어 본 재료를 먼저 넣어 주세요</span>'}</div></div>
-      <div class="field"><span class="field-label">먹어 본 재료</span><div class="chips">${tried.map((f) => (c.known.includes(f) ? `<button class="chip mknown" type="button" data-act="unknown" data-f="${esc(f)}" aria-label="${esc(f)} 빼기">${esc(f)}<span class="x" aria-hidden="true">×</span></button>` : `<span class="chip">${esc(f)}</span>`)).join('')}<button class="chip dashed" type="button" data-act="known">+ 재료</button></div>
+      <div class="field"><span class="field-label">매일 넣는 재료</span><div class="chips">${triedAll.map((f) => `<button class="chip" type="button" data-act="base" data-f="${esc(f)}" aria-pressed="${c.base.includes(f)}">${esc(f)}</button>`).join('') || '<span class="hint">먹어 본 재료를 먼저 넣어 주세요</span>'}</div></div>
+      <div class="field"><span class="field-label">먹어 본 재료</span><div class="chips">${triedAll.map((f) => (c.known.includes(f) ? `<button class="chip mknown" type="button" data-act="unknown" data-f="${esc(f)}" aria-label="${esc(f)} 빼기">${esc(f)}<span class="x" aria-hidden="true">×</span></button>` : `<span class="chip">${esc(f)}</span>`)).join('')}<button class="chip dashed" type="button" data-act="known">+ 재료</button></div>
         <div class="add-row" data-box="known" hidden><input class="text-input" maxlength="20" placeholder="식단 전부터 먹던 재료" autocomplete="off" enterkeyhint="done"><button class="chip" type="button" data-act="knownok">추가</button></div></div>
-      ${started ? '' : `<div class="field"><span class="field-label">다음 새 재료 시작일</span><div class="when-row"><label class="when-btn date"><small>시작</small><span class="wd">${esc(evDateBtn(start))}</span><input type="date" aria-label="다음 새 재료 시작일" min="${addDays(t, 1)}" value="${start}"></label></div></div>`}
-      <div class="field"><span class="field-label">재료 순서</span><ul class="mlist">${rows || '<li class="mgap">재료를 넣어 주세요</li>'}</ul>
-        <div class="row" style="margin-top:10px"><button class="chip" type="button" data-act="add">+ 재료 넣기</button>${draft.length ? '<button class="chip" type="button" data-act="postpone">하루 미루기</button>' : ''}</div>
+      <div class="field"><span class="field-label">재료 순서</span><p class="hint" style="margin-top:0">날짜는 이유식 기록을 보고 날마다 다시 정해요. 안 먹인 날은 저절로 밀려요.</p><ul class="mlist">${list || '<li class="mgap">재료를 넣어 주세요</li>'}</ul>
+        ${rests.length ? `<p class="mgap">새 재료 쉬는 날: ${esc(rests.map((m) => `${evDayShort2(m.date)}${m.days > 1 ? ` ~ ${evDayShort2(mealEnd(m))}` : ''}`).join(', '))}</p>` : ''}
+        <div class="row" style="margin-top:10px"><button class="chip" type="button" data-act="add">+ 재료 넣기</button></div>
         <div class="madd" ${addOpen ? '' : 'hidden'}><div class="chips">${quick.map((f) => `<button class="chip" type="button" data-act="quick" data-f="${esc(f)}">${esc(f)}${isAllergyFood(f) ? ' <small class="warn">주의</small>' : ''}</button>`).join('')}</div>
           <div class="add-row"><input class="text-input" data-in="food" maxlength="20" placeholder="재료 이름" autocomplete="off" enterkeyhint="done"><button class="chip" type="button" data-act="addok">추가</button></div></div></div>
+      ${outHtml ? `<div class="field"><span class="field-label">식단 밖에서 먹은 재료</span><ul class="mlist">${outHtml}</ul></div>` : ''}
+      <div class="field"><span class="field-label">자동으로 이어질 재료</span><p class="hint" style="margin-top:0">식단이 끝나면 생후 개월에 맞춰 이어서 골라요</p><div class="chips">${autoHtml || '<span class="hint">없어요</span>'}</div>
+        ${pickAuto ? `<div class="row"><button class="chip" type="button" data-act="addrow" data-f="${esc(pickAuto)}">${esc(pickAuto)} 식단에 넣기</button><button class="chip" type="button" data-act="skip" data-f="${esc(pickAuto)}">추천에서 빼기</button></div>` : ''}</div>
+      ${c.skip.length ? `<div class="field"><span class="field-label">추천에서 뺀 재료</span><div class="chips">${c.skip.map((f) => `<span class="chip">${esc(f)}</span><button class="chip dashed" type="button" data-act="unskip" data-f="${esc(f)}">${esc(f)} 되돌리기</button>`).join('')}</div></div>` : ''}
       <p class="note">달걀, 밀가루 같은 알레르기 주의 재료는 평일 오전에 처음 먹여요. 아토피가 심하거나 음식에 반응한 적이 있으면 소아과와 먼저 상의해요</p>`;
     body.appendChild(err);
-    const di = body.querySelector('input[type=date]');
-    if (di) { openPicker(di); di.addEventListener('change', () => { if (/^\d{4}-\d{2}-\d{2}$/.test(di.value) && di.value > t) { start = di.value; draft.forEach((m) => { if (m.date > t) m.date = ''; }); paint(); } }); }
     const fi = body.querySelector('input[data-in=food]');
     if (fi) fi.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addFood(fi.value); } });
     const ki = body.querySelector('[data-box=known] input');
     if (ki) ki.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addKnown(ki.value); } });
   };
+  const newRow = (f) => ({ id:newId(), date:'', days:MEAL_DAYS, food:f, kind:'새 재료', result:'', memo:'', createdAt:new Date().toISOString(), updatedAt:'' });
+  // 맨 뒤 줄로: 날짜 순 정렬에서 뒤에 오게 가장 늦은 날짜 뒤로
+  const pushBack = (row) => { const last = draft.reduce((m, x) => (x.date > m ? x.date : m), t); row.date = addDays(last, 1); draft.push(row); };
   const addFood = (v) => {
     const f = cleanFood(v);
     if (!f) return;
     if (f.includes('꿀')) { err.textContent = HONEY_MSG; return; }
     err.textContent = '';
-    draft.push({ id:newId(), date:'', days:MEAL_DAYS, food:f, kind:'새 재료', result:'', memo:'', createdAt:'', updatedAt:'' });
+    pushBack(newRow(f));
     addOpen = true; paint();
   };
   const addKnown = (v) => {
@@ -3618,32 +3956,33 @@ function openMealEdit(back) {
   body.addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
     if (!b || b.disabled) return;
-    const act = b.dataset.act, i = Number(b.dataset.i), m = draft[i];
+    const act = b.dataset.act, i = Number(b.dataset.i), m = draft[i], f = b.dataset.f;
     if (act !== 'del') armed = '';
     if (act === 'adjm') c.dayAdj = Math.max(-60, c.dayAdj - 1);
     else if (act === 'adjp') c.dayAdj = Math.min(60, c.dayAdj + 1);
-    else if (act === 'base') { const f = b.dataset.f; c.base = c.base.includes(f) ? c.base.filter((x) => x !== f) : c.base.concat(f); }
-    else if (act === 'unknown') { const f = b.dataset.f; c.known = c.known.filter((x) => x !== f); c.base = c.base.filter((x) => x !== f || triedFoods(t, draft, c).includes(x)); }
+    else if (act === 'base') c.base = c.base.includes(f) ? c.base.filter((x) => x !== f) : c.base.concat(f);
+    else if (act === 'unknown') { c.known = c.known.filter((x) => x !== f); }
     else if (act === 'known') { const box = body.querySelector('[data-box=known]'); box.hidden = false; box.querySelector('input').focus(); return; }
     else if (act === 'knownok') { addKnown(body.querySelector('[data-box=known] input').value); return; }
     else if (act === 'minus') m.days = Math.max(1, m.days - 1);
     else if (act === 'plus') m.days = Math.min(7, m.days + 1);
-    else if (act === 'up' || act === 'down') {
-      const j = act === 'up' ? i - 1 : i + 1;
-      if (j < 0 || j >= draft.length || draft[j].date <= t) return;
-      [draft[i], draft[j]] = [draft[j], draft[i]];
-      draft.forEach((x) => { if (x.date > t && x.kind !== '쉼') x.date = ''; });
+    else if (act === 'up' || act === 'down') {   // 아직인 줄끼리 날짜(순서 기준)를 맞바꿈
+      const yet = ordered().filter((x) => eng.status(x.food) === 'yet');
+      const yi = yet.indexOf(m), o = yet[act === 'up' ? yi - 1 : yi + 1];
+      if (!o) return;
+      const a1 = m.date, a2 = o.date, c1 = m.createdAt, c2 = o.createdAt;
+      if (a1 === a2) { m.createdAt = c2; o.createdAt = c1; } else { m.date = a2; o.date = a1; }
     } else if (act === 'del') {
       if (armed !== m.id) { armed = m.id; paint(); return; }
       armed = ''; draft.splice(i, 1); if (meals[m.id]) removed.push(m.id);
-    } else if (act === 'add') { addOpen = !addOpen; }
-    else if (act === 'quick') { addFood(b.dataset.f); return; }
+    } else if (act === 'add') addOpen = !addOpen;
+    else if (act === 'quick') { addFood(f); return; }
     else if (act === 'addok') { addFood(body.querySelector('input[data-in=food]').value); return; }
-    else if (act === 'postpone') {
-      const next = postponeList(draft, t) || postponeList(draft, (draft.find((x) => x.date > t) || {}).date || t);
-      if (next) { draft = next; toast('하루 미뤘어요'); }
-    } else return;
-    if (act === 'minus' || act === 'plus' || act === 'del') draft.forEach((x) => { if (x.date > t && x.kind !== '쉼') x.date = ''; });
+    else if (act === 'addrow') { if (!draft.some((x) => x.food === f)) pushBack(newRow(f)); pickAuto = ''; c.skip = c.skip.filter((x) => x !== f); }
+    else if (act === 'skip') { if (!c.skip.includes(f)) c.skip.push(f); pickAuto = ''; }
+    else if (act === 'unskip') c.skip = c.skip.filter((x) => x !== f);
+    else if (act === 'auto') pickAuto = pickAuto === f ? '' : f;
+    else return;
     paint();
   });
   paint();
@@ -3651,9 +3990,9 @@ function openMealEdit(back) {
   const save = h('button', { class:'primary', type:'button' }, first ? '식단 만들기' : '저장');
   save.addEventListener('click', () => {
     if (!draft.length && first) { err.textContent = '재료를 하나 넣어 주세요'; return; }
-    draft = laid();
+    const e = mealEngine(draft, c);
     const before = JSON.stringify(mealConf());
-    commitMeals(draft, removed, true);
+    commitMeals(rowDates(draft, e), removed, true);
     if (first || JSON.stringify(normMealCfg(c)) !== before || !mealCfg) setMealCfg(c);
     render();
     closeSheet(true);
@@ -5130,7 +5469,8 @@ function boot() {
     if (act === 'cal') openEvents(todayStr(), null, false, 'meal');
     else if (act === 'day') openMealDay(todayStr());
     else if (act === 'edit') openMealEdit();
-    else if (act === 'postpone') { if (postponeFrom(b.dataset.d)) toast('새 재료를 하루 미뤘어요'); }
+    else if (act === 'react') { setReact(mealEngine(), b.dataset.f, true); toast(`${b.dataset.f} 반응 있었어요로 적었어요`); }
+    else if (act === 'notreact') { store.set('mealNotReact', [`${b.dataset.rid}|${b.dataset.f}`].concat(store.get('mealNotReact', [])).slice(0, 50)); render(); }   // 이 폰에만
   });
   $('#pics').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]');
