@@ -303,6 +303,31 @@ svg{display:block}
 .mrow-top > small{margin-left:auto;font-size:13px;color:var(--muted);white-space:nowrap}
 .mrow-top > small.now{color:var(--food)}
 .mrow-top > small.bad{color:var(--danger)}
+.meal-prep-btn{margin-top:8px;font-size:14px;color:var(--food)}
+.meal-prep-acts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 2px 0}
+.meal-prep-acts .chip{height:44px}
+.prep-tab{margin-bottom:10px}
+.prep-head{margin:0 2px 10px;font-size:16px}
+.prep-card{margin-top:10px;padding:12px 14px;border-radius:16px;background:var(--surface-2)}
+.prep-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin:0;font-size:15px;line-height:1.4}
+.prep-title b{font-weight:400;font-size:16px}
+.prep-title span{color:var(--food)}
+.prep-title small{font-size:12px;color:var(--muted)}
+.prep-sub{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.prep-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
+.prep-lines li{margin:2px 0}
+.prep-small{display:block;margin:8px 2px 0;font-size:12px;color:var(--muted);line-height:1.45}
+.prep-two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.prep-two > div{padding:10px 12px;border-radius:14px;background:var(--lamp-soft);font-size:13px;line-height:1.5}
+.prep-two p{margin:4px 0 0}
+.prep-order{margin:0;padding:0;list-style:none}
+.prep-order li{padding:10px 2px;border-bottom:1px solid var(--line)}
+.prep-order b{display:block;font-weight:400;font-size:16px}
+.prep-order small{display:block;margin-top:2px;font-size:12px;color:var(--muted)}
+.prep-home{margin:12px 2px 0;font-size:14px;line-height:1.45}
+.prep-copy{margin-top:12px;height:44px}
+.md-how{margin-top:12px;padding:8px 12px;border-radius:14px;background:var(--surface-2)}
+.md-how summary{min-height:32px;line-height:32px;font-size:14px;cursor:pointer}
 .meal-next{margin:8px 0 0;font-size:14px;color:var(--food);line-height:1.4}
 .meal-fever{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;padding:8px 8px 8px 12px;border-radius:14px;background:var(--lamp-soft);font-size:14px;line-height:1.4}
 .meal-fever .chip{flex:none;height:40px;background:var(--surface)}
@@ -683,7 +708,7 @@ textarea.memo:focus{box-shadow:inset 0 0 0 2px var(--lamp)}
 'use strict';
 
 const PREVIEW = false;          // 미리보기용 복사본에서만 true
-const VERSION = '1.12.0';
+const VERSION = '1.13.0';
 const KEY = 'babylog.v1.';
 
 /* ---------- 기본 정보 ---------- */
@@ -2934,7 +2959,7 @@ function openEvents(selDate, monthKey, reuse, modeArg) {
       <div class="cal-swipe${slide ? ` go-${slide}` : ''}"><div class="cal-week">${WEEK.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
       <div class="cal-grid">${grid}</div></div>
       <p class="cal-legend"><span><i class="mdot2 mc-first"></i>새 재료 첫날</span><span><i class="mdot2 mc-soft"></i>새 재료</span><span><i class="mdot2 mc-old"></i>먹던 것만</span></p>
-      ${has ? prepLine(eng) : '<p class="evday-empty">아직 식단이 없어요. 아래 식단 만들기를 눌러 주세요</p>'}
+      ${has ? `${prepLine(eng)}<div class="row meal-prep-acts"><button class="chip" type="button" data-prep="make">만들기 3일치</button><button class="chip" type="button" data-prep="order">주문 7일치</button></div>` : '<p class="evday-empty">아직 식단이 없어요. 아래 식단 만들기를 눌러 주세요</p>'}
       ${wl ? `<p class="meal-w">${esc(wl)} <small>참고</small></p>` : ''}
       ${rows ? `<p class="md-small">${MEAL_CHECK}${ahead ? '<br>앞날 양은 이번 주 기준으로 미리 본 값이에요. 그 주가 되면 실제 먹은 양으로 다시 정해요' : ''}</p><ul class="evl mlil">${rows}</ul>` : ''}`;
     paintHead();
@@ -3013,6 +3038,7 @@ function openEvents(selDate, monthKey, reuse, modeArg) {
     if (b.dataset.mode) { if (b.dataset.mode !== mode) { mode = b.dataset.mode; paint(); } return; }   // 일정 | 이유식 전환
     if (b.dataset.d) { sel = b.dataset.d; mon = sel.slice(0, 7); paint(); if (mode === 'meal') openMealDay(sel, back); else openDaySheet(sel, back); return; }   // 그날 창을 겹쳐 엶(다른 달 날짜면 돌아왔을 때 그 달)
     if (b.dataset.md) { openMealDay(b.dataset.md, back); return; }
+    if (b.dataset.prep) { openMealPrep(b.dataset.prep, back); return; }
     if (b.dataset.id) { const e = events[b.dataset.id]; if (e) openEventSheet(e, null, back); return; }
     const act = b.dataset.act;
     if (act === 'prev' || act === 'next') moveMonth(act);
@@ -3448,9 +3474,11 @@ function mealStage(d) {
   return { stage, noBirth:false, midNew:stage === '중기' && daysBetween(m7, d) < 7, midFirst:d === m7 };
 }
 const mealMenu = (foods, stage) => {
-  const w = STAGE_WORD[stage], parts = foods.filter((f) => f !== '쌀');
-  if (!parts.length) return foods.includes('쌀') ? (stage === '후기' ? '무른밥' : `쌀${w}`) : w;
-  return `${parts.join(' ')} ${w}`;
+  const w = STAGE_WORD[stage], fr = foods.filter((f) => foodGroup(f) === 'fruit'), rest = foods.filter((f) => foodGroup(f) !== 'fruit');
+  const parts = rest.filter((f) => f !== '쌀');
+  const main = !rest.length ? '' : !parts.length ? (stage === '후기' ? '무른밥' : `쌀${w}`) : `${parts.join(' ')} ${w}`;
+  const side = fr.map((f) => `${f} 퓌레`).join(' + ');   // 1.13.0: 과일은 따로 퓌레로(근거 16)
+  return main && side ? `${main} + ${side}` : main || side || w;
 };
 
 /* 식단 계산(1.12.0). list, conf를 주면 그걸로(고치기 창 미리 보기) */
@@ -3628,8 +3656,8 @@ function splitMeal(foods, top, stage, firstNew) {
   return foods.map((f) => {
     const g0 = foodGroup(f), k = g0 === 'fruit' ? 'veg' : g0;
     const g = gs[k].length ? share[k] / gs[k].length : 0;
-    const label = f === '쌀' ? RICE_NAME[stage] : f;
-    const text = f === firstNew ? '1숟가락부터' : Math.round(g) < 1 ? '조금' : `${Math.round(g)}g`;
+    const fruit = g0 === 'fruit', label = f === '쌀' ? RICE_NAME[stage] : fruit ? `${f} 퓌레` : f;
+    const text = (f === firstNew ? '1숟가락부터' : Math.round(g) < 1 ? '조금' : `${Math.round(g)}g`) + (fruit ? ' (따로)' : '');
     return { f, label, g, text };
   });
 }
@@ -3731,6 +3759,193 @@ function rowDates(rows, eng) {
   });
 }
 
+/* 이유식 준비(1.13.0): 토핑식. 미음(죽) 베이스는 크게 만들어 한 끼씩 얼리고, 재료는 따로 손질해 익혀 큐브로 만든 뒤 먹일 때 섞음.
+   만들기는 다음 끼부터 3일(3일치 준비할 양과 같은 기간과 양), 주문은 내일부터 7일. 손질, 익히기, 보관, 해동 문구는 03의 근거 16~19만.
+   장보기 무게와 개수는 근거 없는 앱 기본 대략값(03의 장보기 가정값). 여기에는 일반 기본값만 둠 */
+// 재료별 손질, 익히기, 주의(근거 16. 소고기는 16, 17). 이름은 칩 해석 뒤 이름(달걀은 달걀노른자, 닭고기는 닭안심 페이지)
+const PREP = {
+  '쌀':['씻어서 충분히 불려요', '', ''],
+  '소고기':['겉면 지방, 힘줄, 질긴 막을 떼고 찬물에 20~30분 담가 핏물을 빼요', '삶거나 쪄서 속까지 충분히 익혀요', '생고기는 다른 재료와 따로 다뤄요'],
+  '애호박':['씻어서 꼭지와 껍질을 벗기고, 씨가 단단하면 빼요', '삶거나 쪄서 충분히 부드럽게', ''],
+  '청경채':['밑동을 자르고 잎을 한 장씩 떼어 씻은 뒤 두꺼운 잎자루는 빼요', '끓는 물에 충분히 데쳐요', ''],
+  '달걀':['껍데기에 금이 없는 신선한 달걀로', '흰자까지 완전히 익게 완숙으로 삶고 노른자만 곱게 으깨요', '노른자만 먹여도 알레르기 위험이 없어지지는 않아요'],
+  '밀가루':['찬물에 먼저 풀어 덩어리를 없애요', '끓는 미음에 넣고 저으며 완전히 익을 때까지', ''],
+  '브로콜리':['작은 송이로 나눠 꽃봉오리 사이까지 씻고, 단단한 줄기와 누런 꽃봉오리는 빼요', '삶거나 쪄서 포크로 쉽게 으깨질 만큼', ''],
+  '감자':['씻어서 껍질, 싹, 초록색 부분을 충분히 도려내요', '충분히 익혀요', ''],
+  '양배추':['겉잎과 굵은 심은 빼고 잎을 한 장씩 떼어 씻어요', '삶거나 쪄서 잎맥까지 부드럽게', ''],
+  '단호박':['씻어서 반으로 갈라 씨와 속을 빼고 껍질을 벗겨요', '충분히 익혀요', ''],
+  '고구마':['씻어서 껍질을 벗기고 상한 부분을 도려내요', '충분히 익혀요', ''],
+  '오이':['껍질과 씨(가운데)를 빼요', '삶거나 쪄서 충분히 부드럽게', '생으로 주지 않아요'],
+  '찹쌀':['여러 번 씻어 충분히 불려요', '쌀알 가운데가 남지 않게 충분히 익혀요', '끈적한 덩어리가 없게'],
+  '오트밀':['설탕, 소금, 향료 없는 플레인으로', '곱게 갈아 물을 넣고 충분히 끓여요', '밀이 섞일 수 있어 알레르기 표시를 확인해요'],
+  '무':['껍질과 단단하거나 질긴 부분을 빼요', '삶거나 쪄서 속까지 부드럽게', '생무는 자극이 있어 충분히 익혀요'],
+  '콜리플라워':['겉잎과 굵은 줄기는 빼고 꽃봉오리를 작은 송이로 나눠 씻어요', '삶거나 쪄서 쉽게 으깨질 만큼', ''],
+  '배추':['겉잎과 두꺼운 흰 줄기는 빼고 연한 잎을 써요', '끓는 물에 충분히 데치거나 삶아요', ''],
+  '사과':['씻어서 껍질을 벗기고 씨와 단단한 심을 빼요', '물 조금 넣고 익히거나 쪄요', '미음에 섞기보다 따로 퓌레로 줘요'],
+  '배':['껍질, 씨, 단단한 심을 빼요', '삶거나 쪄서 곱게 으깨요', '미음에 섞기보다 따로 퓌레로 줘요'],
+  '당근':['씻어서 껍질을 얇게 벗기고 꼭지와 질긴 부분을 빼요', '충분히 익혀요', ''],
+  '시금치':['연한 잎만 쓰고 뿌리와 굵은 줄기는 빼요', '끓는 물에 충분히 데친 뒤 데친 물은 버리고 헹궈 물기를 짜요', ''],
+  '닭고기':['안심으로. 지방, 가운데 힘줄, 얇은 막을 떼요. 생닭은 물에 씻지 않아요', '속까지 충분히 익혀요', ''],
+  '두부':['포장 속 물을 버리고 가볍게 헹궈요', '끓는 물에 데쳐 충분히 익혀요', '처음 줄 때 다른 새 재료와 같이 시작하지 않아요'],
+  '대구':['비늘, 내장, 껍질, 굵은 가시와 잔가시를 빼고 살만 발라요', '속까지 익힌 뒤 가시를 다시 확인해요', ''],
+  '현미':['여러 번 씻어 충분히 불려요(오래 불릴 땐 냉장)', '속까지 부드럽게 익혀 곱게 갈아요', ''],
+  '귀리':['씻어서 충분히 불려요', '속까지 부드럽게 익혀요', ''],
+};
+const PREP_NAME = { '달걀':'달걀노른자' };
+const PREP_DEFAULT = '깨끗이 씻어 껍질, 씨, 질긴 부분을 빼고 속까지 충분히 익혀요';
+const PREP_SIZE = { '초기':'익혀서 곱게 갈아 체에 내려요', '중기':'1~2mm로 곱게 다져요(익숙해지면 3~5mm까지)', '후기':'5~8mm로 잘라 부드럽게 익혀요' };   // 근거 16, 13
+const RICE_X = { '초기':10, '중기':7.5, '후기':5 };   // 미음(죽) 무게 ÷ 배수 = 쌀(근거 6, 14)
+const RICE_MACHINE = '씻어서 충분히 불린 쌀과 물을 기계 최소선 이상 넣고 이유식 모드로 만들어요. 다 되면 바로 덜어 식히고, 덩어리가 있으면 고운 체에 걸러요. 덜 익었으면 냄비에 옮겨 약불에서 저으며 더 익혀요';
+const RICE_POT = '씻어서 충분히 불린 쌀을 물 조금과 곱게 갈고, 나머지 물을 넣어 약불에서 저으며 완전히 익혀요. 고운 체에 걸러요';
+const PREP_MIN = '기계 최소선보다 적으면 최소선까지 늘려 만들고, 남는 건 한 끼씩 얼려 1주일 안에 써요';   // 근거 8, 18
+const PREP_KEEP = '한 끼 먹을 만큼씩 나눠 얼려요. 얼린 건 1주일 안에 써요';   // 근거 18, 8
+const PREP_SERVE = '냉장고에서 녹이고(급하면 밀봉해서 찬물에), 충분히 데운 뒤 5~10분 식혀 체온 정도로 줘요. 실온에 두고 녹이지 않아요. 남은 음식은 실온에 두지 않아요';   // 근거 18, 19
+// 장보기 가정값(근거 없음, 03): 단위, 한 단위 무게 g, 손질 뒤 남는 비율, 익힌 뒤 무게 비율. 단위 'g'는 무게로, 'egg'는 노른자 한 개 무게
+const BUY = {
+  '소고기':{ unit:'g', keep:0.9, cook:0.7, label:'소고기(안심이나 우둔)', note:'지방 없는 부위(안심, 우둔, 홍두깨살, 설도)' },   // 부위는 근거 17
+  '돼지고기':{ unit:'g', keep:0.9, cook:0.7 },
+  '닭고기':{ unit:'g', keep:0.9, cook:0.75 },
+  '대구':{ unit:'g', keep:1, cook:0.8, label:'대구(순살)' },
+  '애호박':{ unit:'개', w:300, keep:0.8, cook:1 },
+  '청경채':{ unit:'봉', w:200, keep:0.5, cook:1 },
+  '브로콜리':{ unit:'송이', w:300, keep:0.5, cook:1 },
+  '콜리플라워':{ unit:'송이', w:500, keep:0.5, cook:1 },
+  '감자':{ unit:'개', w:150, keep:0.85, cook:1 },
+  '고구마':{ unit:'개', w:200, keep:0.85, cook:1 },
+  '단호박':{ unit:'개', w:800, keep:0.65, cook:1 },
+  '양배추':{ unit:'1/4통', w:300, keep:0.75, cook:1 },
+  '배추':{ unit:'알배추 1통', w:500, keep:0.6, cook:1 },
+  '오이':{ unit:'개', w:200, keep:0.6, cook:1 },
+  '무':{ unit:'토막', w:300, keep:0.85, cook:1 },
+  '당근':{ unit:'개', w:150, keep:0.85, cook:1 },
+  '시금치':{ unit:'단', w:200, keep:0.6, cook:1 },
+  '사과':{ unit:'개', w:250, keep:0.75, cook:1 },
+  '배':{ unit:'개', w:500, keep:0.75, cook:1 },
+  '바나나':{ unit:'개', w:120, keep:0.65, cook:1 },
+  '복숭아':{ unit:'개', w:200, keep:0.75, cook:1 },
+  '두부':{ unit:'팩', w:300, keep:1, cook:1 },
+  '달걀':{ unit:'egg', w:15, keep:1, cook:1 },
+};
+const buyCount = (f, n, u) => (u === '1/4통' ? `${f} 1/4통${n > 1 ? ` ${n}개` : ''}` : u === '알배추 1통' ? `알배추 ${n}통` : u === 'egg' ? `달걀 ${n}개` : `${f} ${n}${u}`);
+const up5 = (g) => Math.max(5, Math.ceil(g / 5) * 5);
+const prepName = (f) => PREP_NAME[f] || f;
+// 기간 안 끼를 재료별로 더함(끼 권장 위 값으로 splitMeal, 새 재료 첫날도 묶음 몫). 쌀은 날마다 그날 단계 배수로 쌀 무게도 더함
+function prepSum(eng, start, n) {
+  const sum = new Map();
+  const get = (f) => { if (!sum.has(f)) sum.set(f, { f, g:0, raw:0, snack:false, newFrom:'', isNew:false, stage:'' }); return sum.get(f); };
+  for (let i = 0; i < n; i++) {
+    const d = addDays(start, i), p = eng.plans.get(d), a = mealAmt(d, eng);
+    if (!p || !a) continue;
+    p.meals.forEach((m, mi) => {
+      if (m.eaten) return;
+      splitMeal(m.foods, mealTop(a, mi)[1], p.stage, '').forEach((x) => {
+        const o = get(x.f);
+        o.g += x.g; if (foodGroup(x.f) === 'grain') o.raw += x.g / RICE_X[p.stage];
+        if (!o.stage) o.stage = p.stage;
+      });
+    });
+    if (p.nf && sum.has(p.nf)) { const o = sum.get(p.nf); o.isNew = true; if (p.k === 1 && !o.newFrom) o.newFrom = d; }
+    if (p.snack) { const o = get(p.snack); o.snack = true; if (!o.stage) o.stage = p.stage; }
+  }
+  return Array.from(sum.values());
+}
+const prepStart = (eng) => (eng.plans.get(eng.t).meals.some((m) => !m.eaten) ? eng.t : addDays(eng.t, 1));
+const dayNum = (d) => `${parseD(d).getDate()}일`;
+// 만들기(다음 끼부터 3일): 미음 베이스(쌀 = 미음 ÷ 배수, 물 = 쌀 × 배수, 올림)와 곡류 줄, 재료 카드(먹는 순서대로)
+function mealMake(eng) {
+  const start = prepStart(eng), end = addDays(start, 2);
+  const stage = mealStage(start).stage, x = RICE_X[stage];
+  const items = prepSum(eng, start, 3);
+  const r = items.find((o) => o.f === '쌀');
+  let rice = null;
+  if (r && r.g > 0) { const mieum = up5(r.g), rg = Math.ceil(mieum / x); rice = { name:RICE_NAME[stage], mieum, rice:rg, water:Math.ceil(rg * x), x }; }
+  const line = (o) => { const t = PREP[o.f]; return { f:o.f, name:prepName(o.f), g:o.g, amt:o.g > 0 ? `약 ${up5(o.g)}g` : o.snack ? '간식' : '', prep:t ? t[0] : '', cook:t ? t[1] : '', warn:t ? t[2] : '', def:!t,
+    tag:o.newFrom ? `새 재료 ${dayNum(o.newFrom)}부터` : o.isNew ? '새 재료' : '' }; };
+  const grains = items.filter((o) => o.f !== '쌀' && foodGroup(o.f) === 'grain').map(line);
+  const cards = items.filter((o) => foodGroup(o.f) !== 'grain').map(line);
+  return { start, end, stage, rice, grains, cards, size:PREP_SIZE[stage] };
+}
+// 주문(내일부터 7일): 생재료 = 익힌 g ÷ 남는 비율 ÷ 익힌 뒤 비율. 고기는 10g 단위, 개수는 올림(적어도 1), 달걀은 노른자 15g, 곡류는 집에 있는지 확인
+function mealOrder(eng) {
+  const start = addDays(eng.t, 1), end = addDays(start, 6);
+  const items = [], home = [];
+  prepSum(eng, start, 7).forEach((o) => {
+    if (foodGroup(o.f) === 'grain') { if (o.g > 0) home.push(o.f === '밀가루' ? `${o.f} 조금` : `${o.f} 약 ${Math.ceil(o.raw)}g`); return; }
+    const b = BUY[o.f];
+    if (!b) { items.push({ f:o.f, text:o.g > 0 ? `${o.f} 익힌 양 약 ${up5(o.g)}g` : `${o.f} 1개`, sub:o.g > 0 ? '' : '간식' }); return; }
+    if (b.unit === 'g') { items.push({ f:o.f, text:`${b.label || o.f} 약 ${Math.max(10, Math.ceil(o.g / b.keep / b.cook / 10) * 10)}g`, sub:b.note || '' }); return; }
+    if (b.unit === 'egg') { items.push({ f:o.f, text:buyCount(o.f, Math.max(1, Math.ceil(o.g / b.w)), b.unit), sub:'' }); return; }
+    const raw = o.g / b.keep / b.cook;
+    const n = Math.max(1, (o.g > 0 ? Math.ceil(raw / b.w) : 0) + (o.snack ? 1 : 0));   // 간식 과일은 1개 단위로만 더함
+    items.push({ f:o.f, text:buyCount(o.f, n, b.unit), sub:o.g > 0 ? `필요 약 ${up5(raw)}g` : '간식' });
+  });
+  const s = parseD(start), e = parseD(end);
+  const range = `${s.getMonth() + 1}월 ${s.getDate()}일 ~ ${s.getMonth() === e.getMonth() ? '' : `${e.getMonth() + 1}월 `}${e.getDate()}일`;
+  const copy = [`이유식 주문 (${range}, 대략)`].concat(items.map((x) => x.text), home.length ? [`집에 있는지 확인: ${home.join(', ')}`] : []).join('\n');
+  return { start, end, items, home, copy };
+}
+// 그날 창 '만드는 법' 줄: 그날 남은 끼 재료마다 손질과 익히기, 그날 단계 크기, 먹일 때
+function howLines(p) {
+  const foods = [];
+  p.meals.forEach((m) => { if (!m.eaten) m.foods.forEach((f) => { if (!foods.includes(f)) foods.push(f); }); });
+  if (p.snack && !foods.includes(p.snack)) foods.push(p.snack);
+  const out = foods.map((f) => {
+    if (f === '쌀') return `${RICE_NAME[p.stage]}: 쌀을 씻어서 충분히 불리고 ${RICE_X[p.stage]}배죽으로 만들어요(만드는 법은 이유식 준비 창에 있어요)`;
+    const t = PREP[f];
+    return `${prepName(f)}: ${t ? `${t[0]}. ${t[1]}${t[2] ? `. ${t[2]}` : ''}` : PREP_DEFAULT}`;
+  });
+  out.push(`크기: ${PREP_SIZE[p.stage]}`, `먹일 때: ${PREP_SERVE}`);
+  return out;
+}
+
+/* '이유식 준비' 창: 만들기 | 주문. 달력에서 열면 달력 위로 겹쳐 엶(그날 창과 같은 뒤로가기 규칙) */
+function openMealPrep(tab0, backCal, reuse) {
+  let tab = tab0 === 'order' ? 'order' : 'make';
+  const body = h('div', { class:'mealprep' });
+  const li = (a) => a.filter(Boolean).map((x) => `<li>${esc(x)}</li>`).join('');
+  const paint = () => {
+    const eng = mealEngine();
+    let html = `<div class="seg prep-tab" role="group" aria-label="보기"><button type="button" data-tab="make" aria-pressed="${tab === 'make'}">만들기</button><button type="button" data-tab="order" aria-pressed="${tab === 'order'}">주문</button></div>`;
+    if (!mealList().length) html += '<p class="evday-empty">아직 식단이 없어요</p>';
+    else if (tab === 'make') {
+      const mk = mealMake(eng);
+      html += `<p class="prep-head">${dayNum(mk.start)} ~ ${dayNum(mk.end)} 만들 것 (넉넉히)</p>`;
+      if (mk.rice || mk.grains.length) {
+        html += `<div class="prep-card prep-base"><p class="prep-title"><b>${mk.rice ? esc(`${mk.rice.name} 약 ${mk.rice.mieum}g: 쌀 ${mk.rice.rice}g + 물 ${mk.rice.water}ml (${mk.rice.x}배죽)`) : '곡류'}</b></p>`
+          + mk.grains.map((o) => `<div class="prep-sub"><p class="prep-title"><b>${esc(o.name)} ${esc(o.amt)}</b>${o.tag ? `<small>${esc(o.tag)}</small>` : ''}</p><ul class="prep-lines">${o.def ? li([PREP_DEFAULT]) : li([`손질: ${o.prep}`, `익히기: ${o.cook}`, o.warn && `주의: ${o.warn}`])}</ul></div>`).join('')
+          + (mk.rice ? `<ul class="prep-lines">${li([`기계: ${RICE_MACHINE}`, `냄비: ${RICE_POT}`])}</ul><small class="prep-small">${PREP_MIN}</small>` : '') + '</div>';
+      }
+      html += mk.cards.map((o) => `<div class="prep-card" data-food="${esc(o.f)}"><p class="prep-title"><b>${esc(o.name)}</b>${o.amt ? `<span>${esc(o.amt)}</span>` : ''}${o.tag ? `<small>${esc(o.tag)}</small>` : ''}</p>
+        <ul class="prep-lines">${o.def ? li([PREP_DEFAULT]) : li([`손질: ${o.prep}`, `익히기: ${o.cook}`])}${li([`크기: ${mk.size}`, o.warn && `주의: ${o.warn}`])}</ul></div>`).join('');
+      if (!mk.rice && !mk.grains.length && !mk.cards.length) html += '<p class="evday-empty">만들 것이 없어요</p>';
+      html += `<div class="prep-two"><div><b>보관</b><p>${PREP_KEEP}</p></div><div><b>먹일 때</b><p>${PREP_SERVE}</p></div></div>`;
+    } else {
+      const od = mealOrder(eng);
+      html += `<p class="prep-head">${dayNum(od.start)} ~ ${dayNum(od.end)} 주문할 것 (대략)</p>`;
+      html += od.items.length ? `<ul class="prep-order">${od.items.map((x) => `<li data-food="${esc(x.f)}"><b>${esc(x.text)}</b>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</li>`).join('')}</ul>` : '<p class="evday-empty">주문할 것이 없어요</p>';
+      if (od.home.length) html += `<p class="prep-home">집에 있는지 확인: ${esc(od.home.join(', '))}</p>`;
+      html += `<button class="chip prep-copy" type="button" data-act="copy">주문 목록 복사</button>
+        <small class="prep-small">대략 값이에요. 손질하며 버리는 양과 익히며 줄어드는 양까지 넣었어요. 채소는 한 개를 사면 남을 수 있어요</small>`;
+    }
+    body.innerHTML = html;
+  };
+  body.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.tab) { if (b.dataset.tab !== tab) { tab = b.dataset.tab; paint(); } return; }
+    if (b.dataset.act === 'copy') {
+      const text = mealOrder(mealEngine()).copy;
+      try { await navigator.clipboard.writeText(text); toast('주문 목록을 복사했어요'); }
+      catch (e) { const ta = h('textarea', { class:'memo', readonly:true }); ta.value = text; b.after(ta); ta.select(); }
+    }
+  });
+  paint();
+  const box = openSheet({ title:'이유식 준비', iconName:'bowl', color:'food', body, tall:true, onClose:backCal,
+    stack:!!backCal && !reuse, reuse:!!reuse, keepBelow:!!backCal && !reuse });
+  box._repaint = paint;
+  if (underSheet && underSheet.box._repaint) underSheet.box._repaint();
+}
+
 if (PREVIEW) {   // 미리보기에만 예시 식단: 매일 쌀, 소고기, 그다음 애호박, 청경채, 달걀, 밀가루(예시 이유식 기록은 미리보기 만들 때 넣음). 시트로는 안 보냄
   mealCfg = { base:['쌀', '소고기'], known:['쌀', '소고기'], dayAdj:0, skip:[] };
   const t = todayStr();
@@ -3788,7 +4003,7 @@ function renderMeal() {
       <small>반응이면 그 재료는 멈추고 소아과에 물어봐요</small></div>`;
   }
   sec.innerHTML = `<div class="pics-head"><h2>이유식${a.N ? ` <small>${a.N}일째</small>` : ''}</h2><button class="link-btn" type="button" data-act="cal">식단표${icon('right')}</button></div>
-    <div class="meal-card"><button class="meal-open" type="button" data-act="day">${main}</button>${extra}</div>`;
+    <div class="meal-card"><button class="meal-open" type="button" data-act="day">${main}</button>${extra}<button class="link-btn meal-prep-btn" type="button" data-act="prep">만드는 법, 주문할 양${icon('right')}</button></div>`;
 }
 
 /* 그날 이유식 창: 달력에서 누르면 달력 위로 겹쳐 엶(그날 일정 창과 같은 뒤로가기 규칙) */
@@ -3796,6 +4011,8 @@ function openMealDay(d, backCal, reuse) {
   const again = () => openMealDay(d, backCal, true);
   const t = todayStr();
   const body = h('div', { class:'mealday' });
+  let howOpen = false;   // '만드는 법' 펼침(다시 그려도 그대로)
+  body.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('md-how')) howOpen = e.target.open; }, true);
   const paint = () => {
     const eng = mealEngine(), a = mealAmt(d, eng);
     const p = d >= t ? eng.plans.get(d) : null, ps = eng.past(d);
@@ -3814,6 +4031,7 @@ function openMealDay(d, backCal, reuse) {
           ${mi >= 1 && a.midNew ? '<p class="md-line">첫 끼의 절반쯤부터</p>' : ''}</div>`;
       });
       if (p.snack) html += `<p class="md-line">간식: ${esc(p.snack)}</p>`;
+      if (p.meals.some((m) => !m.eaten)) html += `<details class="md-how"${howOpen ? ' open' : ''}><summary>만드는 법</summary><ul class="prep-lines">${howLines(p).map((l) => `<li>${esc(l)}</li>`).join('')}</ul></details>`;
       if (p.nf && p.k === 1 && !p.fromRec) html += `<p class="md-guide">${isAllergyFood(p.nf) ? '평일 오전에 아주 조금부터 줘요. 두드러기, 입 주변 발진, 입술이나 얼굴이 붓는지, 계속 토하는지 살펴요. 숨쉬기 힘들어하면 바로 응급실로 가요' : '첫날은 오전에 한두 숟가락부터 주고 하루 동안 살펴요'}</p>`;
     } else if (ps) {
       if (ps.newFoods.length) html += `<p class="md-step">${esc(ps.newFoods.map((x) => `${x.f} 새 재료 ${x.k}일째${x.bad ? ', 반응 있었어요' : ''}`).join(', '))}</p>`;
@@ -5474,6 +5692,7 @@ function boot() {
     if (act === 'cal') openEvents(todayStr(), null, false, 'meal');
     else if (act === 'day') openMealDay(todayStr());
     else if (act === 'edit') openMealEdit();
+    else if (act === 'prep') openMealPrep('make');
     else if (act === 'react') { setReact(mealEngine(), b.dataset.f, true); toast(`${b.dataset.f}에 반응이 있었다고 적었어요`); }
     else if (act === 'notreact') { store.set('mealNotReact', [`${b.dataset.rid}|${b.dataset.f}`].concat(store.get('mealNotReact', [])).slice(0, 50)); render(); }   // 이 폰에만
   });
