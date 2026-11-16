@@ -74,7 +74,7 @@ function feedText(d) {
 }
 // 일정 한 줄(1.13.1, 사용자가 정한 짧은 모양): '[아빠 일정 추가] 11/20(금) 10:00 소아과'.
 // 사람: 아기는 이 폰의 아기 이름(없으면 '아기'), 같이는 '가족'. 날짜 두 자리 월/일과 요일, 여러 날은 '11/20(금)~11/22(일)'.
-// 시간은 24시간 두 자리, 하루 종일이면 뺌. 매년 표시와 메모는 안 넣음. 수정은 바뀌기 전 값 뒤에 ' → '와 바뀐 칸의 새 값
+// 시간은 24시간 두 자리, 하루 종일이면 '종일'(수정의 바뀌기 전 값, 여러 날도). 매년 표시와 메모는 안 넣음. 수정은 바뀌기 전 값 뒤에 ' → '와 바뀐 칸의 새 값
 const p2 = (n) => String(n).padStart(2, '0');
 function evDay(s) {
   const [y, m, d] = String(s).split('-').map(Number);
@@ -94,7 +94,7 @@ function evLine(e, babyName) {
   if (has('time')) parts.push(e.time ? evHm(e.time) : '종일');
   if (has('title')) parts.push(e.title);
   const whoChanged = has('who') && old.who !== e.who;
-  let line = `[${evWho(e.who, babyName)} 일정 ${EV_KIND[e.kind] || '수정'}] ${evDays(old)}${old.time ? ` ${evHm(old.time)}` : ''} ${old.title}`;
+  let line = `[${evWho(e.who, babyName)} 일정 ${EV_KIND[e.kind] || '수정'}] ${evDays(old)} ${old.time ? evHm(old.time) : '종일'} ${old.title}`;
   if (parts.length) line += ` → ${parts.join(' ')}`;
   if (whoChanged) line += ` (${evWho(old.who, babyName)} → ${evWho(e.who, babyName)})`;
   return line;
